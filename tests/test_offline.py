@@ -12,12 +12,14 @@ from __future__ import annotations
 import atexit
 import importlib.util
 import json
+import os
 import re
 import shutil
 import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 FIX = Path(__file__).resolve().parent / "fixtures"
@@ -345,7 +347,9 @@ class BgLawToolTests(unittest.TestCase):
 
     def test_key_required_without_a_key(self):
         _, h, _ = make(settings={"lsource_api_key": ""})
-        r = call(h, "bg_law_get", citation="чл. 344 КТ")
+        # The plugin falls back to LSOURCE_API_KEY, so the variable must be blank for this case.
+        with mock.patch.dict(os.environ, {"LSOURCE_API_KEY": ""}, clear=False):
+            r = call(h, "bg_law_get", citation="чл. 344 КТ")
         self.assertEqual(r["error_type"], "key_required")
         self.assertIn("lsource.net/developers", r["next_step"])
 
