@@ -1,0 +1,30 @@
+{
+ "id": "kodeks-na-truda",
+ "title": "Кодекс на труда",
+ "kind": "кодекс",
+ "changed": "2026-09-29",
+ "issue": "ДВ бр. 89/2026",
+ "action": "изм. и доп.",
+ "status": "in_force",
+ "replaced_by": "",
+ "audit_score": 0,
+ "history": {
+  "has_history": true,
+  "earliest": "2026-07-31",
+  "reliable_from": "2026-09-29",
+  "latest": "2026-09-29",
+  "count": 2
+ },
+ "official": false,
+ "notice": "Реконструкция от Държавен вестник; не е официален текст — вж. status, audit_score, history.",
+ "links": {
+  "self": "https://lsource.net/v1/acts/kodeks-na-truda",
+  "text": "https://lsource.net/v1/acts/kodeks-na-truda/text",
+  "articles": "https://lsource.net/v1/acts/kodeks-na-truda/articles",
+  "history": "https://lsource.net/v1/acts/kodeks-na-truda/history",
+  "changes": "https://lsource.net/v1/acts/kodeks-na-truda/changes",
+  "akn": "https://lsource.net/v1/acts/kodeks-na-truda/akn",
+  "transposition": "https://lsource.net/v1/acts/kodeks-na-truda/transposition",
+  "html": "https://lsource.net/laws/kodeks-na-truda"
+ }
+}

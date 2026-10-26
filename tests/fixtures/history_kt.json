@@ -1,0 +1,28 @@
+{
+ "id": "kodeks-na-truda",
+ "title": "Кодекс на труда",
+ "coverage": {
+  "has_history": true,
+  "earliest": "2026-07-31",
+  "reliable_from": "2026-09-29",
+  "latest": "2026-09-29",
+  "count": 2
+ },
+ "versions": [
+  {
+   "hash": "6f5e9e3edc",
+   "date": "2026-09-29",
+   "seq": 0,
+   "action": "изм. и доп.",
+   "issue": "ДВ бр. 89/2026",
+   "current": true
+  },
+  {
+   "hash": "857d01c95a",
+   "date": "2026-07-31",
+   "seq": 1,
+   "action": "изм. и доп.",
+   "issue": "ДВ бр. 69/2026"
+  }
+ ]
+}

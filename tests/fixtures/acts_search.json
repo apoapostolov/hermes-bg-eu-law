@@ -1,0 +1,43 @@
+{
+ "total": 59,
+ "offset": 0,
+ "limit": 2,
+ "results": [
+  {
+   "id": "kodeks-na-truda",
+   "title": "Кодекс на труда",
+   "kind": "кодекс",
+   "changed": "2026-09-29",
+   "issue": "ДВ бр. 89/2026",
+   "action": "изм. и доп.",
+   "links": {
+    "self": "https://lsource.net/v1/acts/kodeks-na-truda",
+    "text": "https://lsource.net/v1/acts/kodeks-na-truda/text",
+    "articles": "https://lsource.net/v1/acts/kodeks-na-truda/articles",
+    "history": "https://lsource.net/v1/acts/kodeks-na-truda/history",
+    "changes": "https://lsource.net/v1/acts/kodeks-na-truda/changes",
+    "akn": "https://lsource.net/v1/acts/kodeks-na-truda/akn",
+    "transposition": "https://lsource.net/v1/acts/kodeks-na-truda/transposition",
+    "html": "https://lsource.net/laws/kodeks-na-truda"
+   }
+  },
+  {
+   "id": "kodeks-za-zastrahovaneto",
+   "title": "КОДЕКС ЗА ЗАСТРАХОВАНЕТО",
+   "kind": "кодекс",
+   "changed": "2026-09-24",
+   "issue": "ДВ бр. 87/2026",
+   "action": "изм.",
+   "links": {
+    "self": "https://lsource.net/v1/acts/kodeks-za-zastrahovaneto",
+    "text": "https://lsource.net/v1/acts/kodeks-za-zastrahovaneto/text",
+    "articles": "https://lsource.net/v1/acts/kodeks-za-zastrahovaneto/articles",
+    "history": "https://lsource.net/v1/acts/kodeks-za-zastrahovaneto/history",
+    "changes": "https://lsource.net/v1/acts/kodeks-za-zastrahovaneto/changes",
+    "akn": "https://lsource.net/v1/acts/kodeks-za-zastrahovaneto/akn",
+    "transposition": "https://lsource.net/v1/acts/kodeks-za-zastrahovaneto/transposition",
+    "html": "https://lsource.net/laws/kodeks-za-zastrahovaneto"
+   }
+  }
+ ]
+}

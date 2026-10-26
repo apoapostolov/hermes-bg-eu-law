@@ -1,0 +1,56 @@
+name: bg-law
+version: 1.0.0
+manifest_version: 2
+api_version: 1
+requires_hermes: ">=0.22.2"
+description: "Bulgarian and EU law for Hermes: read one provision (чл. 344, ал. 1 КТ, чл. 6, ал. 1 ОРЗД, Art. 50 AI Act) in the source wording with the Държавен вестник reference, status, source line and gazette chain, search the Bulgarian act corpus, list a law's articles, follow its amendment history by ДВ issue, and read decisions of the Constitutional Court or a judgment of the Court of Justice of the EU. Sources: lsource.net (free API key, consolidated texts reconstructed from Държавен вестник, CC BY 4.0), the Publications Office of the EU (CELLAR) and the Bulgarian Constitutional Court. Texts are cached locally. Legal texts, not legal advice."
+author: apoapostolov
+license: MIT
+homepage: https://github.com/apoapostolov/hermes-bg-eu-law
+tags: [law, legal, bulgaria, eu, gdpr, orzd, ai-act, statutes, case-law, government-data, lsource]
+provides_tools:
+  - bg_law_get
+  - bg_law_search
+  - bg_law_toc
+  - bg_law_history
+  - bg_case_search
+  - bg_case_get
+provides_hooks: []
+config_schema:
+  lsource_api_key:
+    type: secret
+    env: LSOURCE_API_KEY
+    label: "lsource.net API key"
+    description: "Free key from lsource.net/developers (register, then create a key). Needed for Bulgarian statute text. Stored in .env, never in config.yaml."
+  language:
+    type: str
+    choices: [auto, bg, en]
+    default: auto
+    label: "Source line language"
+    description: "Language of the attribution line in results. auto = the language of the text (Bulgarian for Bulgarian law)."
+  eu_language:
+    type: str
+    choices: [bg, en]
+    default: bg
+    label: "EU text language"
+    description: "Default language for EU acts (the model can ask for the other one per call)."
+  max_age_hours:
+    type: int
+    default: 24
+    label: "Recheck after (hours)"
+    description: "Cached acts and indexes older than this are rechecked with the source (usually a short 304 answer). 0 = always recheck."
+  cache_max_mb:
+    type: int
+    default: 200
+    label: "Cache size limit (MB)"
+    description: "Oldest cached texts are deleted when the cache grows beyond this size."
+  case_law:
+    type: bool
+    default: true
+    label: "Case law"
+    description: "Allow bg_case_search and bg_case_get (Constitutional Court acts, CJEU judgments by CELEX)."
+  eu_law:
+    type: bool
+    default: true
+    label: "EU law"
+    description: "Allow EU acts (publications.europa.eu)."

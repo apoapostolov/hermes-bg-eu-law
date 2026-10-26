@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.venv/
+venv/
+
+# Local runtime state, never committed
+config.json
+library.env
+*.log
+.env
+
+# Test scratch
+tests/__pycache__/
