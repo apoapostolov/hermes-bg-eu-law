@@ -16,6 +16,8 @@ from .client import LawError, Store
 logger = logging.getLogger(__name__)
 
 DEFAULT_MAX_CHARS = 6000
+DISCLAIMER = ("Legal texts, not legal advice. The version promulgated in Държавен вестник, and the "
+              "Official Journal for EU acts, is the binding one.")
 _PARA = re.compile(r"^\((\d+[a-zа-я]?)\)\s")
 
 # Abbreviation per act id, for rendering a citation the way a lawyer writes it.
@@ -175,6 +177,19 @@ class Tools:
             return self._eu_get(act, parsed, self._eu_lang(args.get("language")), max_chars)
         return self._bg_get(law, parsed, max_chars, args.get("as_of"))
 
+    def _versions_until(self, act_id: str, as_of: str) -> tuple:
+        """(reconstructed version dates at or before as_of, newest first, coverage dict)."""
+        try:
+            hist = self.bg.history(act_id).data
+        except LawError as err:
+            if err.kind != "not_found":
+                raise
+            return [], {}
+        coverage = hist.get("coverage", {}) if isinstance(hist, dict) else {}
+        dates = sorted({str(v.get("date", "")) for v in hist.get("versions", []) if isinstance(v, dict)},
+                       reverse=True)
+        return [d for d in dates if d and d <= as_of], coverage
+
     def _bg_get(self, law: str, parsed: Dict[str, Any], max_chars: int,
                 as_of: Any = None) -> Dict[str, Any]:
         as_of = str(as_of or "").strip()
@@ -208,13 +223,30 @@ class Tools:
                 result["as_of_note"] = ("Text as reconstructed for the date asked. Where the corpus has no "
                                         "reconstructed history that far back, this is the current text.")
             except LawError as err:
-                if err.kind == "not_found":
+                if err.kind != "not_found":
+                    raise
+                candidates, coverage = self._versions_until(act_id, as_of)
+                for candidate in candidates:
+                    try:
+                        got = self.bg.article_as_of(act_id, art["number"], candidate)
+                    except LawError as inner:
+                        if inner.kind in ("not_found", "as_of_not_available"):
+                            continue
+                        raise
+                    text = got.data.get("text") or text
+                    result["as_of"] = as_of
+                    result["as_of_used"] = candidate
+                    result["as_of_note"] = (f"No snapshot exists for {as_of} itself; this is the text as "
+                                            f"reconstructed for {candidate}, the newest version at or before "
+                                            f"that date that the corpus can serve. Say which date the text "
+                                            f"belongs to when quoting it.")
+                    break
+                else:
                     raise LawError("as_of_not_available",
-                                   f"No reconstructed text of {act_id} exists for {as_of}.",
-                                   "Read the current text without as_of, and say the corpus has no "
-                                   "point-in-time text for that date.",
-                                   {"history": (self.bg._safe_meta(act_id) or {}).get("history", {})}) from err
-                raise
+                                   f"The corpus cannot serve {act_id} as it stood on {as_of}.",
+                                   "Read the current text without as_of, and say no point-in-time text is "
+                                   "available for that date.",
+                                   {"coverage": coverage, "versions_tried": candidates[:5]}) from err
         para = parsed.get("paragraph")
         if para:
             parts = lsource.split_paragraphs(text)
@@ -329,7 +361,8 @@ class Tools:
                                      "id": uid, "title": heading[1] if len(heading) > 1 else "", **cut}
         if cut["truncated"]:
             provision["next_step"] = f"Text cut at {max_chars} characters; call again with max_chars up to 30000."
-        version: Dict[str, Any] = {"document": doc_id, "consolidated_as_of": consolidated, "language": lang}
+        version: Dict[str, Any] = {"document": doc_id, "celex": celex, "consolidated_as_of": consolidated,
+                                   "language": lang}
         for key in ("official_journal", "amended_by", "corrected_by", "legal_effect"):
             if facts.get(key):
                 version[key] = facts[key]
@@ -392,6 +425,19 @@ class Tools:
         limit = _int(args.get("limit"), 10, 1, 50)
         kind = str(args.get("kind") or "").strip()
         results: List[Dict[str, Any]] = []
+        # 'ЗЗД' is not a substring of any title, so the corpus search alone can never find it.
+        alias_id = lsource.ALIASES.get(lsource.fold(query).strip()) or lsource._loose_alias(query)
+        if alias_id:
+            try:
+                meta = self.bg.meta(alias_id).data
+            except LawError as err:
+                if err.kind not in ("key_required", "not_found"):
+                    raise
+            else:
+                results.append({"jurisdiction": "BG", "law": alias_id, "title": meta.get("title", ""),
+                                "abbreviation": ABBR_BY_ID.get(alias_id, ""), "kind": meta.get("kind", ""),
+                                "issue": meta.get("issue", ""), "changed": meta.get("changed", ""),
+                                "url": lsource.public_url(alias_id), "match": "abbreviation"})
         if self._flag("eu_law"):
             for act in eu_mod.search_known(query):
                 results.append({"jurisdiction": "EU", "law": act["bg"],
@@ -407,7 +453,10 @@ class Tools:
                         "only EU acts are searched without it.")
             else:
                 raise
+        seen_ids = {r.get("law") for r in results}
         for row in rows:
+            if row.get("id") in seen_ids:
+                continue
             results.append({"jurisdiction": "BG", "law": row.get("id", ""), "title": row.get("title", ""),
                             "abbreviation": ABBR_BY_ID.get(row.get("id", ""), ""),
                             "kind": row.get("kind", ""), "issue": row.get("issue", ""),
@@ -500,10 +549,10 @@ class Tools:
                                          for c in data["chapters"]]}}
         return entries, head, self._source_bg(act_id, act_title, meta.data, cached)
 
-    def _eu_toc(self, act: Dict[str, Any], lang: str):
-        cached, doc_id, consolidated, note = self._eu_doc(act, lang)
-        entries = []
-        for uid, unit in cached.data["units"].items():
+    @staticmethod
+    def _eu_entries(doc: Dict[str, Any], lang: str) -> List[Dict[str, Any]]:
+        entries: List[Dict[str, Any]] = []
+        for uid, unit in doc["units"].items():
             lines = unit["text"].split("\n")
             kind = uid.split("_")[0]
             title = lines[1] if len(lines) > 1 and not _PARA.match(lines[1]) else ""
@@ -514,11 +563,69 @@ class Tools:
             number = uid.split("_", 1)[1]
             entries.append({"id": f"{label} {number}", "title": title if kind != "rct" else "",
                             "_text": unit["text"]})
+        return entries
+
+    def _eu_toc(self, act: Dict[str, Any], lang: str):
+        cached, doc_id, consolidated, note = self._eu_doc(act, lang)
+        entries = self._eu_entries(cached.data, lang)
+        prefix = "съображение" if lang == "bg" else "Recital"
+        if not any(entry["id"].startswith(prefix) for entry in entries):
+            # Consolidated texts drop the recitals, and a recital is citable, so it has to be listed.
+            try:
+                alt, _alt_id, _alt_cons, _alt_note = self._eu_doc(act, lang, original=True)
+            except LawError:
+                alt = None
+            if alt is not None:
+                recitals = [e for e in self._eu_entries(alt.data, lang) if e["id"].startswith(prefix)]
+                if recitals:
+                    entries = recitals + entries
+                    extra = ("Recitals are listed from the original Official Journal text; the consolidated "
+                             "text omits them.")
+                    note = f"{note} {extra}" if note else extra
         facts = cached.data.get("facts", {})
         head = {"jurisdiction": "EU", "law": {"abbreviation": act.get(lang) or act["celex"], "celex": act["celex"],
                                              "title": facts.get("title", "")},
-                "version": {"document": doc_id, "consolidated_as_of": consolidated, "note": note}}
+                "version": {"document": doc_id, "celex": act["celex"], "consolidated_as_of": consolidated,
+                            "note": note}}
         return entries, head, self._source_eu(doc_id, consolidated, lang, cached)
+
+    def _eu_history(self, act: Dict[str, Any], lang: str, limit: int) -> Dict[str, Any]:
+        """Consolidated versions published for one CELEX, newest first."""
+        celex = act["celex"]
+        cached, doc_id, consolidated, note = self._eu_doc(act, lang)
+        facts = cached.data.get("facts", {})
+        try:
+            versions = self.eu.versions(celex)
+        except LawError as err:
+            if err.kind not in ("not_found", "upstream", "network", "timeout"):
+                raise
+            versions = []
+        versions = sorted({v for v in versions if v}, reverse=True)
+        payload: Dict[str, Any] = {
+            "ok": True, "jurisdiction": "EU",
+            "law": {"abbreviation": act.get(lang) or act.get("bg") or celex, "celex": celex,
+                    "title": facts.get("title", ""), "url": eu_mod.human_url(celex, lang)},
+            "status": {"consolidated_as_of": consolidated, "official": True,
+                       "legal_effect": facts.get("legal_effect", ""),
+                       "official_journal": facts.get("official_journal", ""),
+                       "amended_by": facts.get("amended_by", []),
+                       "corrected_by": facts.get("corrected_by", [])},
+            "versions": {"total": len(versions), "entries": versions[:limit], "current": doc_id,
+                         "note": ("Consolidated versions the Publications Office publishes for this CELEX, "
+                                  "newest first. bg_law_get reads the newest one; a date from this list is a "
+                                  "real snapshot, unlike an arbitrary as_of date.")},
+            "source": self._source_eu(doc_id, consolidated, lang, cached),
+        }
+        if not versions:
+            payload["versions"]["limitation"] = ("No consolidated versions are published for this CELEX, so "
+                                                 "bg_law_get returns the original Official Journal text.")
+        if note:
+            payload["version_note"] = note
+        stale = self._stale_note(cached)
+        if stale:
+            payload["stale"] = True
+            payload["stale_note"] = stale
+        return payload
 
     # --------------------------------------------------------- bg_law_history
     def law_history(self, args: Dict[str, Any]) -> Dict[str, Any]:
@@ -526,7 +633,15 @@ class Tools:
         if not law:
             raise LawError("bad_argument", "No act given.", "Pass an act, e.g. 'КТ'.")
         limit = _int(args.get("limit"), 40, 1, 300)
-        act_id, title = self.bg.resolve(law)
+        try:
+            act_id, title = self.bg.resolve(law)
+        except LawError as err:
+            if err.kind not in ("law_not_found", "ambiguous_law"):
+                raise
+            act_eu = eu_mod.match_eu(law)
+            if act_eu and self._flag("eu_law"):
+                return self._eu_history(act_eu, self._eu_lang(args.get("language")), limit)
+            raise
         cached = self.bg.act(act_id)
         data = cached.data
         meta = self.bg.meta(act_id)
@@ -603,8 +718,12 @@ class Tools:
             "covers": ("Published acts of the Bulgarian Constitutional Court only: решения, определения, "
                        "становища and особени мнения. The Supreme Courts (ВКС, ВАС), appellate and first-instance "
                        "courts are not covered."),
+            "act_types": sorted({row["act_type"] for row in index.data if row.get("act_type")}),
             "source": {"name": "Конституционен съд на Република България (search-acts index)",
-                       "url": constcourt.LIST_URL, "retrieved_at": _iso_ts(index.fetched_at),
+                       "url": constcourt.LIST_URL, "license": "public",
+                       "attribution": ("Източник: Конституционен съд на Република България "
+                                       "(www.constcourt.bg), списък на публикуваните актове."),
+                       "retrieved_at": _iso_ts(index.fetched_at),
                        "cache": index.state, "acts_indexed": len(index.data)},
         }
         if query:
@@ -630,6 +749,11 @@ class Tools:
         case_number = str(args.get("case_number") or "").strip()
         if celex:
             return self._judgment(celex, self._eu_lang(args.get("language")), args.get("paragraph"), max_chars)
+        if not doc_id and case_number and (eu_mod.match_case(case_number)
+                                           or re.fullmatch(r"[CTF]-\d+/\d{2,4}", case_number, re.I)):
+            # C-311/18 is a Court of Justice case number; Bulgarian numbers look nothing like it.
+            return self._judgment(case_number, self._eu_lang(args.get("language")), args.get("paragraph"),
+                                  max_chars)
         if not doc_id and case_number:
             rows, _scanned, _capped = self.cases.search(case_number, None, None, None, None, 0)
             if len(rows) == 1:
@@ -728,7 +852,10 @@ def _as_handler(fn: Callable[[Dict[str, Any]], Dict[str, Any]], name: str) -> Ca
         try:
             if not isinstance(args, dict):
                 args = {}
-            return _dump(fn(dict(args)))
+            payload = fn(dict(args))
+            if isinstance(payload, dict) and payload.get("ok") and "disclaimer" not in payload:
+                payload["disclaimer"] = DISCLAIMER
+            return _dump(payload)
         except LawError as err:
             return _error(err.kind, err.message, err.hint, err.details)
         except Exception as err:  # never let a tool call break the agent loop

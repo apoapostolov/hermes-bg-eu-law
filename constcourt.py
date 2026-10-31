@@ -85,6 +85,11 @@ def _parse_act(body: bytes, resp: Response) -> Dict[str, Any]:
         text = html_to_text(parse_html(container[:end if end > 0 else len(container)])[0])
     if not text:
         text = html_to_text(root)
+    text = text.strip()
+    if not meta.get("вид на акта") or len(text) < 100:
+        # An unknown or withdrawn act still answers 200, with the site chrome and no case detail block.
+        raise LawError("case_not_found", f"No published Constitutional Court act at {resp.url}.",
+                       "Pass a doc_id from bg_case_search; the act may be unpublished or withdrawn.")
     date = meta.get("дата", "")
     d = _DATE.search(date or "")
     return {
@@ -92,7 +97,7 @@ def _parse_act(body: bytes, resp: Response) -> Dict[str, Any]:
         "act_type": (meta.get("вид на акта") or _clean(heading.group(1))) if heading else meta.get("вид на акта", ""),
         "date": f"{d.group(3)}-{d.group(2)}-{d.group(1)}" if d else date,
         "case_number": meta.get("към дело", ""),
-        "text": text.strip(),
+        "text": text,
         "url": resp.url,
     }
 
@@ -125,7 +130,7 @@ class CaseLaw:
                 continue
             if want_year and row["case_year"] != want_year:
                 continue
-            if kind and kind not in fold(row["act_type"]):
+            if kind and fold(row["act_type"]) != kind:
                 continue
             if date_from and row["date"] < date_from:
                 continue

@@ -1,0 +1,18 @@
+{
+ "head": {
+  "vars": [
+   "celex"
+  ]
+ },
+ "results": {
+  "bindings": [
+   {
+    "celex": {
+     "type": "literal",
+     "datatype": "http://www.w3.org/2001/XMLSchema#string",
+     "value": "02016R0679-20160504"
+    }
+   }
+  ]
+ }
+}

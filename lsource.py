@@ -139,6 +139,11 @@ _ARTICLE_END = re.compile(r"(ът|ят|та|то|те)$")
 _SOFT_END = re.compile(r"[ая]$")
 
 
+def words_covered(want: str, title: str) -> bool:
+    """True when every significant word of the query appears in the title."""
+    return all(word in title for word in want.split() if len(word) > 2)
+
+
 def loose_title(text: str) -> str:
     """Title key that ignores the Bulgarian definite article: 'Кодекса на труда' == 'Кодекс на труда'."""
     words = strip_title(text).split()
@@ -432,16 +437,18 @@ class BulgarianLaw:
             meta = self._safe_meta(query)
             if meta:
                 return query, meta.get("title", query)
-        rows = self.search(query, 10)
+        want = loose_title(query)
+        rows = self._find_rows(query, want)
         if rows:
-            want = loose_title(query)
             exact = [r for r in rows if loose_title(r.get("title", "")) == want]
             if len(exact) == 1:
                 return exact[0]["id"], exact[0]["title"]
             starts = [r for r in rows if loose_title(r.get("title", "")).startswith(want)]
             if len(starts) == 1:
                 return starts[0]["id"], starts[0]["title"]
-            if len(rows) == 1:
+            # A single search hit is only trusted when it actually covers the query: the API matches
+            # titles literally, so a наредба whose title quotes a закон can be the only row returned.
+            if len(rows) == 1 and words_covered(want, loose_title(rows[0].get("title", ""))):
                 return rows[0]["id"], rows[0]["title"]
             if exact:
                 rows = exact
@@ -456,6 +463,27 @@ class BulgarianLaw:
                        "Call bg_law_search with a shorter title word, or the official abbreviation "
                        "(ALIASES covers the common ones, e.g. КТ, НК, ЗЗД, ТЗ). Municipal наредби and "
                        "EU acts are not in this corpus.")
+
+    def _find_rows(self, query: str, loose: str) -> List[Dict[str, Any]]:
+        """Search rows for the query, and for its article-free form when the two differ.
+
+        Titles are matched literally by the API, so a query carrying the definite article
+        ('Закона за защита на личните данни') misses the act itself and can land on an unrelated
+        act whose title merely quotes that string. The loose form is tried first for that reason."""
+        seen: Dict[str, Dict[str, Any]] = {}
+        terms = ([loose] if loose and loose != query else []) + [query]
+        for term in terms:
+            if not term:
+                continue
+            try:
+                found = self.search(term, 10)
+            except LawError as err:
+                if err.kind == "law_not_found" and term != query:
+                    continue
+                raise
+            for row in found:
+                seen.setdefault(row.get("id", ""), row)
+        return list(seen.values())
 
     def _safe_meta(self, act_id: str) -> Optional[Dict[str, Any]]:
         try:

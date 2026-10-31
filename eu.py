@@ -220,17 +220,18 @@ def _parse_judgment(body: bytes, resp: Response) -> Dict[str, Any]:
     text = body.decode("utf-8", errors="replace")
     root, ids = parse_html(text)
     points: Dict[str, str] = {}
-    for uid, node in ids.items():
-        m = re.fullmatch(r"point(\d+)", uid)
-        if not m:
-            continue
-        # The number sits in its own cell; the paragraph body is the row it belongs to.
-        row = node
-        while row is not None and row.tag not in ("tr", "table"):
-            row = row.parent
-        body_text = html_to_text(row) if row is not None else html_to_text(node)
-        body_text = re.sub(r"^[\s|]*%s[\s|]+" % m.group(1), "", body_text).strip()
-        points[m.group(1)] = body_text or html_to_text(node)
+    # A point's number cell is anchored with id="pointN", but the Court splits long points over
+    # several following table rows that carry no anchor. Slicing from one anchor to the next keeps
+    # the whole point instead of its first row.
+    anchors = [(m.group(1), m.start()) for m in re.finditer(r'id="point(\d+)"', text)]
+    for index, (number, start) in enumerate(anchors):
+        end = anchors[index + 1][1] if index + 1 < len(anchors) else len(text)
+        chunk_start = text.rfind("<", 0, start)
+        chunk_root, _chunk_ids = parse_html(text[chunk_start if chunk_start >= 0 else start:end])
+        body_text = html_to_text(chunk_root).strip()
+        body_text = re.sub(r"^[\s|]*%s[\s|.]+" % number, "", body_text).strip()
+        if body_text:
+            points[number] = body_text
     full = html_to_text(root)
     head = " ".join(full.split()[:60])
     return {"points": points, "text": _strip_markers(full), "head": head, "cellar_url": resp.url}

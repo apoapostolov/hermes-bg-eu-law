@@ -505,7 +505,7 @@ class SafetyTests(unittest.TestCase):
 
         with self.assertRaises(client.LawError) as ctx:
             client.Http(transport=transport).get("https://lsource.net/v1/acts")
-        self.assertEqual(ctx.exception.kind, "network")
+        self.assertEqual(ctx.exception.kind, "host_not_allowed")
 
     def test_size_cap(self):
         http = client.Http(transport=lambda url, hd: client.Response(200, b"x" * 2000, {}, url))
@@ -588,5 +588,132 @@ class ManifestTests(unittest.TestCase):
         self.assertEqual(bad, [])
 
 
+# ------------------------------------------------------------------ regressions
+
+CHROME_ONLY_PAGE = (
+    b'<html><body><div class="page"><h1>\xd0\x90\xd0\xba\xd1\x82</h1>'
+    b'<div id="document-content"><p>' + b"site chrome without a case detail block " * 8 + b"</p></div>"
+    b"</div></body></html>"
+)  # synthetic: an unknown act id still answers 200 with the site chrome
+
+
+def as_of_body(marker: str) -> bytes:
+    """Synthetic: the same article served as it stood on an older reconstruction."""
+    data = payload("article_344.json")
+    data["text"] = f"\u0427\u043b. 344. (1) {marker}"
+    return json.dumps(data, ensure_ascii=False).encode("utf-8")
+
+
+class RegressionTests(unittest.TestCase):
+    def test_search_resolves_an_abbreviation_the_corpus_cannot(self):
+        t, h, web = make()
+        web.add(r"/v1/acts/zakon-za-zadalzheniyata-i-dogovorite$", fixture("act_meta_zzd.json"),
+                {"content-type": "application/json"})
+        r = call(h, "bg_law_search", query="ЗЗД")
+        first = r["results"][0]
+        self.assertEqual(first["law"], "zakon-za-zadalzheniyata-i-dogovorite")
+        self.assertEqual(first["match"], "abbreviation")
+
+    def test_eu_history_lists_consolidated_versions(self):
+        t, h, web = make()
+        web.add(r"/resource/celex/02016R0679-20160504$", fixture("eu_document.xhtml"),
+                {"content-type": "application/xhtml+xml;charset=UTF-8"})
+        web.add(r"/webapi/rdf/sparql\?", fixture("eu_versions.json"),
+                {"content-type": "application/sparql-results+json"})
+        r = call(h, "bg_law_history", law="\u041e\u0420\u0417\u0414")
+        self.assertEqual(r["jurisdiction"], "EU")
+        self.assertEqual(r["law"]["celex"], "32016R0679")
+        self.assertGreaterEqual(r["versions"]["total"], 1)
+        self.assertTrue(r["versions"]["entries"][0].startswith("02016R0679-"))
+        self.assertEqual(r["versions"]["current"], "02016R0679-20160504")
+
+    def test_eu_history_says_when_no_consolidation_exists(self):
+        t, h, web = make()  # the default route answers an empty binding set
+        r = call(h, "bg_law_history", law="\u0420\u0435\u0433\u043b\u0430\u043c\u0435\u043d\u0442 \u0437\u0430 \u0418\u0418")
+        self.assertEqual(r["versions"]["total"], 0)
+        self.assertIn("No consolidated versions", r["versions"]["limitation"])
+
+    def test_eu_toc_lists_recitals_beside_articles(self):
+        t, h, web = make()
+        r = call(h, "bg_law_toc", law="\u041e\u0420\u0417\u0414", limit=200)
+        ids = [e["id"] for e in r["entries"]]
+        self.assertTrue(any(i.startswith("\u0441\u044a\u043e\u0431\u0440\u0430\u0436\u0435\u043d\u0438\u0435") for i in ids), ids[:8])
+        self.assertTrue(any(i.startswith("\u0447\u043b.") for i in ids), ids[:8])
+
+    def test_eu_version_carries_its_celex(self):
+        t, h, web = make()
+        r = call(h, "bg_law_get", citation="\u0447\u043b. 6 \u041e\u0420\u0417\u0414")
+        self.assertEqual(r["version"]["celex"], "32016R0679")
+        self.assertEqual(r["law"]["celex"], "32016R0679")
+
+    def test_every_success_carries_the_disclaimer(self):
+        t, h, web = make()
+        for name, args in (("bg_law_get", {"citation": "\u0447\u043b. 344 \u041a\u0422"}),
+                           ("bg_law_toc", {"law": "\u041a\u0422", "limit": 2}),
+                           ("bg_law_history", {"law": "\u041a\u0422"})):
+            r = call(h, name, **args)
+            self.assertTrue(r["ok"], r)
+            self.assertIn("not legal advice", r["disclaimer"], name)
+
+    def test_act_type_filter_is_an_exact_match(self):
+        t, h, web = make()
+        index = constcourt.CaseLaw(t.store).index()
+        wanted = sorted({row["act_type"] for row in index.data})[0]
+        rows, _scanned, _capped = constcourt.CaseLaw(t.store).search(act_type=wanted)
+        self.assertTrue(rows, wanted)
+        self.assertTrue(all(row["act_type"] == wanted for row in rows), wanted)
+
+    def test_a_superset_act_type_does_not_match(self):
+        t, h, web = make()
+        rows, _scanned, _capped = constcourt.CaseLaw(t.store).search(act_type="\u0440\u0435\u0448\u0435\u043d\u0438\u0435")
+        self.assertTrue(all(row["act_type"] == "\u0440\u0435\u0448\u0435\u043d\u0438\u0435" for row in rows),
+                        [row["act_type"] for row in rows])
+
+    def test_unknown_doc_id_is_case_not_found(self):
+        t, h, web = make()
+        web.add(r"constcourt\.bg/bg/act-99999999$", CHROME_ONLY_PAGE,
+                {"content-type": "text/html; charset=utf-8"})
+        r = call(h, "bg_case_get", doc_id="act-99999999")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error_type"], "case_not_found")
+
+    def test_judgment_points_have_no_markup_leftovers(self):
+        t, h, web = make()
+        r = call(h, "bg_case_get", celex="62018CJ0311")
+        self.assertTrue(r["ok"], r)
+        cached = t.eu.judgment("62018CJ0311", "bg").data
+        self.assertGreaterEqual(len(cached["points"]), 2)
+        for number, text in cached["points"].items():
+            self.assertNotIn('id="', text, number)
+            self.assertTrue(text.strip(), number)
+        longest = max(len(v) for v in cached["points"].values())
+        self.assertGreater(longest, 400, "a long point should include its continuation rows")
+
+    def test_as_of_uses_the_newest_earlier_reconstruction(self):
+        t, h, web = make()
+        web.add(r"/articles/344\?as_of=2026-07-31$", as_of_body("OLD VERSION MARKER"),
+                {"content-type": "application/json"})
+        r = call(h, "bg_law_get", citation="\u0447\u043b. 344 \u041a\u0422", as_of="2026-08-15")
+        self.assertTrue(r["ok"], r)
+        self.assertEqual(r["as_of"], "2026-08-15")
+        self.assertEqual(r["as_of_used"], "2026-07-31")
+        self.assertIn("OLD VERSION MARKER", r["provision"]["text"])
+
+    def test_as_of_before_the_reconstruction_refuses_with_coverage(self):
+        t, h, web = make()
+        r = call(h, "bg_law_get", citation="\u0447\u043b. 344 \u041a\u0422", as_of="1990-01-01")
+        self.assertFalse(r["ok"])
+        self.assertEqual(r["error_type"], "as_of_not_available")
+        self.assertIn("coverage", r)
+
+    def test_a_rejected_key_is_reported_not_swallowed(self):
+        t, h, web = make()
+        web.down = True
+        r = call(h, "bg_law_get", citation="\u0447\u043b. 344 \u041a\u0422")
+        self.assertFalse(r["ok"])
+        self.assertIn(r["error_type"], ("network", "stale", "upstream"))
+
+
 if __name__ == "__main__":
     unittest.main()
+

@@ -112,7 +112,8 @@ TOC = {
 HISTORY = {
     "name": "bg_law_history",
     "description": (
-        "Bulgarian law: the ДВ amendment history of one act. "
+        "Bulgarian law: the ДВ amendment history of one act. For an EU act it returns the consolidated versions instead. "
+        "For a Bulgarian act the full ДВ promulgation chain; for an EU act (ОРЗД, Регламент за ИИ, a CELEX) the consolidated versions the Publications Office publishes. "
         "Read-only. Returns the full promulgation chain of a Bulgarian act (обн. and every изм./доп. with the "
         "Държавен вестник issue and date, parsed from the act itself), the corpus status (in force, repealed, "
         "not yet in force), the dates for which a point-in-time text exists, and the ДВ link. Use it to answer "
@@ -145,8 +146,8 @@ CASE_SEARCH = {
             "case_number": {"type": "string", "description": "Constitutional case number: '15/2026', '33/2024'."},
             "query": {"type": "string", "description": "Words to find inside the acts, e.g. 'данък', "
                                                         "'изборен кодекс'."},
-            "act_type": {"type": "string", "description": "Act type filter: 'решение', 'определение', "
-                                                           "'становище по решение'."},
+            "act_type": {"type": "string", "description": "Exact act type: 'решение', 'определение', "
+                                                           "'становище по решение', 'особено мнение по решение'. Call without it to see the types in `act_types`."},
             "date_from": {"type": "string", "description": "Earliest act date, YYYY-MM-DD."},
             "date_to": {"type": "string", "description": "Latest act date, YYYY-MM-DD."},
             "scan_limit": {"type": "integer", "minimum": 1, "maximum": 25, "default": 8,

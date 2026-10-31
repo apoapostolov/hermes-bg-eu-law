@@ -58,7 +58,7 @@ against the live corpus, because a wrong abbreviation silently returns a plausib
 | `bg_law_get` | One article and one алинея of a Bulgarian act, or one article, recital or annex of an EU act |
 | `bg_law_search` | An act by abbreviation or title word, plus the well-known EU acts |
 | `bg_law_toc` | The act's articles with the глава and раздел each sits in, filterable by a word, with a snippet |
-| `bg_law_history` | The full ДВ promulgation chain, the act's status, and the dates a point-in-time text exists for |
+| `bg_law_history` | The full ДВ promulgation chain and status of a Bulgarian act, or the consolidated versions of an EU act |
 | `bg_case_search` | Constitutional Court acts by case number, act type, date range or keyword |
 | `bg_case_get` | One Constitutional Court act, or one numbered point of a CJEU judgment |
 
@@ -77,7 +77,8 @@ A result looks like this (trimmed):
  "version": {"status": "in_force", "issue": "ДВ бр. 89/2026", "changed": "2026-09-29",
              "official": false, "gazette_count": 129},
  "source": {"url": "https://lsource.net/laws/kodeks-na-truda", "license": "CC BY 4.0",
-            "attribution": "Източник: Питай законите (lsource.net) ..."}
+            "attribution": "Източник: Питай законите (lsource.net) ..."},
+ "disclaimer": "Legal texts, not legal advice. The version promulgated in Държавен вестник, and the Official Journal for EU acts, is the binding one."
 }
 ```
 
@@ -97,6 +98,12 @@ needs the free key, and it marks every record `official: false`, which the plugi
 One consequence worth knowing before scraping it by hand: the public act page at `/laws/<id>` is a free
 preview that stops mid-sentence. Кодекс на труда ends inside чл. 162. Only the API serves the whole act,
 so the plugin reads the API and never the page.
+
+An EU act's toc lists its recitals as well as its articles, because a recital is citable and the
+consolidated text drops them; those rows come from the original Official Journal text and the answer says
+so. `bg_law_history` on an EU act returns the consolidated versions the Publications Office publishes,
+which is the only honest meaning of "history" for a regulation: they are real snapshots, unlike an
+arbitrary as_of date.
 
 EU law and judgments come from the Publications Office of the EU (CELLAR) through content negotiation:
 XHTML in `bul` or `eng`, with the ELI structure intact (`art_6`, `rct_47`, `anx_III`, and `point201` for
@@ -119,12 +126,20 @@ Where a source is missing, the tool says so and links what exists. It does not f
 The plugin treats a missing answer as a result, not as an invitation. `чл. 9999 КТ` returns
 `article_not_found` with the instruction to list the act's articles, never a neighbouring number. A
 withheld text (HTTP 409, where the corpus audit flagged an act) comes back as `withheld` with the advice
-not to quote it. A missing key returns `key_required` with the registration link.
+not to quote it. A missing key returns `key_required` with the registration link, and a wrong key returns
+`unauthorized` rather than a silent empty result.
+
+The rest of the vocabulary is stable enough to branch on: `bad_argument` for input the tool cannot use,
+`law_not_found` and `ambiguous_law` (with candidates), `article_not_found` and `paragraph_not_found`,
+`case_not_found` and `ambiguous_case`, `as_of_not_available`, `host_not_allowed` for anything outside the
+three source hosts, `disabled` when a feature is switched off in settings, and `internal` if the plugin
+itself fails. Every error carries a `next_step` a model can act on.
 
 `as_of` works only where the corpus has a reconstructed history, and that varies per act: Кодекс на труда
-carries two versions from 31.07.2026, Наказателен кодекс carries none. When the date asked for is older
-than the reconstruction reaches, the answer falls back to the current text and says so, rather than
-pretending to a snapshot it does not have.
+carries two versions from 31.07.2026, Наказателен кодекс carries none. A date between two snapshots is
+served from the newest version at or before it, and the answer reports `as_of_used` so the text can be
+dated correctly. A date before the reconstruction reaches returns `as_of_not_available` with the coverage
+it does have, instead of a snapshot that does not exist.
 
 If a source cannot be reached, the last cached copy is served with `stale: true` and the date it was
 fetched. Text cut at `max_chars` reports `truncated: true` with the character count, so a partial quote is
@@ -151,9 +166,13 @@ Against the live sources on 26.10.2026, on Windows 11 with Python 3.11: `чл. 3
 `чл. 50` and `приложение III` of the AI Act, `bg_case_search` for к.д. 15/2026 (seven acts, ambiguous on
 read, then read by `doc_id`), and `Schrems II` point 201.
 
-`python -m unittest discover -s tests` runs 50 offline tests over response fixtures trimmed from those
-real payloads, with no network. `hermes plugins validate` passes the manifest, registration, collision and
-security gates (6 tools, 0 hooks). The Bulgarian parser is the part most likely to drift when the source
+`python -m unittest discover -s tests` runs 63 offline tests over response fixtures trimmed from those
+real payloads, with no network. `python scripts/live_check.py` runs 184 live checks in ten groups (reading,
+negative paths, structure, EU, case law, limits, resilience, hostile input, concurrency, attribution)
+against all three sources with a throwaway cache, and every defect listed in the changelog was found by
+it: exact error types, the ДВ issue, per-host request spacing, warm and stale cache behaviour, six
+concurrent lookups, and a JSON parse of every cache file. `hermes plugins validate` passes the manifest,
+registration, collision and security gates (6 tools, 0 hooks). The Bulgarian parser is the part most likely to drift when the source
 changes its layout, which is why the cache key carries a parser version and a parser fix invalidates
 cached parses instead of serving them.
 

@@ -69,7 +69,8 @@ def _check_url(url: str) -> str:
     parts = urllib.parse.urlsplit(url)
     host = (parts.hostname or "").lower()
     if host not in ALLOWED_HOSTS:
-        raise LawError("network", f"Refused to contact {host or url!r}: not one of the plugin's source hosts.")
+        raise LawError("host_not_allowed",
+                       f"Refused to contact {host or url!r}: not one of the plugin's source hosts.")
     if parts.scheme == "http":  # every source host serves the same paths over HTTPS
         parts = parts._replace(scheme="https")
     elif parts.scheme != "https":
