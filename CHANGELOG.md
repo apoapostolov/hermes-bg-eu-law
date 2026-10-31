@@ -3,41 +3,48 @@
 All notable changes to bg-law are recorded here. The format follows Keep a Changelog and the version
 follows the plugin manifest.
 
-## [Unreleased]
+## [1.0.1] - 2026-10-31
 
-Found by `scripts/live_check.py`, the 184 check harness that runs against the live sources.
+A citation that resolved to the wrong act, a judgment paragraph that stopped mid-sentence and an EU
+question that was refused with "not in this corpus" all had the same root cause: the parsers had never
+been run against the live sources, only against fixtures. This release is the result of doing that, 184
+checks at a time. Nothing about the tools changed on the surface; what changed is that the answers hold.
 
 ### Fixed
 
 - A long act name carrying the definite article (`чл. 6, ал. 1 от Закона за защита на личните данни`)
-  resolved to an unrelated наредба whose title quotes that string. The resolver now searches the
-  article-free form of the name and only trusts a single search hit when it actually covers the query.
-- `bg_law_search` found nothing for an abbreviation (`ЗЗД`), because the corpus search matches titles
-  literally and no title contains it. The verified alias table is now consulted first.
-- `bg_law_history` refused an EU act with `law_not_found`. It now returns the consolidated versions the
-  Publications Office publishes, with the legal effect and the current document.
-- `bg_case_get(case_number="C-311/18")` searched the Bulgarian Constitutional Court. A Court of Justice
-  case number (or a known case name) now goes to the judgment reader.
-- `bg_law_toc` on an EU act listed no recitals, because consolidated texts omit them. Recitals are now
-  listed from the original Official Journal text, with a note saying where they came from.
-- Court of Justice points were cut to the first table row, so a long point came back as a fragment. A
-  point now runs from its own anchor to the next one, which keeps the continuation rows.
-- `bg_case_search(act_type="решение")` also returned `особено мнение по решение`. The filter is an exact
-  match, and the payload lists the `act_types` it knows so a caller can pick a valid one.
-- An unknown Constitutional Court doc id answered `ok` with the site chrome as its text. A page without
-  the case detail block is now `case_not_found`.
-- `as_of` with a date between two reconstructions failed with `not_found`, and a date before coverage gave
-  no coverage detail. It now serves the newest version at or before the date (`as_of_used`), and otherwise
-  refuses with `as_of_not_available` plus the coverage it has.
-- The host allowlist reported a refused host as `network`; it is now `host_not_allowed`.
+  resolved to an unrelated наредба whose title quotes the same words. The act you name is now the act you get.
+- `bg_law_history` refused every EU act, although its description promised them. It now returns the
+  consolidated versions the Publications Office publishes, with the current one named.
+- A Court of Justice case number (`bg_case_get(case_number="C-311/18")`) searched the Bulgarian
+  Constitutional Court and found nothing. It now goes to the judgment.
+- A long numbered point of a judgment came back as its first table row: point 201 of Schrems II was 82
+  characters instead of the whole point.
+- `bg_law_search` returned nothing for an abbreviation (`ЗЗД`), because the corpus search matches titles
+  literally and no title contains those letters.
+- `bg_law_toc` on an EU act listed no recitals, because consolidated texts drop them. Recitals are listed
+  from the original Official Journal text, and the answer says where they came from.
+- `bg_case_search(act_type="решение")` also returned `особено мнение по решение`. The filter is exact, and
+  the result lists the types it knows.
+- An unknown Constitutional Court id answered `ok` with the site chrome as its text; it is now
+  `case_not_found`.
+- `as_of` with a date between two reconstructions failed instead of serving the newest version at or
+  before it; a date before coverage now names the coverage it has. Both are reported as `as_of_used` and
+  `as_of_not_available` rather than as a fallback the caller has to infer.
+- A refused host is reported as `host_not_allowed`, not as a network failure.
 
 ### Added
 
-- Every successful payload carries a `disclaimer` saying the texts are not legal advice and naming the
-  binding version.
-- `bg_case_search` carries a licence, an attribution and `act_types` with its results.
+- Every successful payload carries a `disclaimer` naming the binding text, so an answer built from it can
+  repeat the limit without the caller inventing one.
+- `bg_case_search` returns the licence, the attribution and the legal `act_types` it accepts.
 - `bg_law_get` on an EU act reports `version.celex` next to the document id.
-- `scripts/live_check.py`, the live harness, and 13 offline regression tests for the defects above.
+- `scripts/live_check.py`, the harness behind this release: ten groups, real sources, throwaway cache.
+
+### Notes
+
+- The parser version moved to 2, so the first lookup after upgrading reparses from the source instead of
+  serving text cached by the previous parsers.
 
 ## [1.0.0] - 2026-10-26
 
