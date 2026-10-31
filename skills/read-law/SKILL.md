@@ -22,6 +22,9 @@ query such as "Bulgarian law article" or "Bulgarian Constitutional Court", then 
   of the Court of Justice (C-311/18) belongs in `bg_case_get`, not in the Bulgarian court. A judgment of the Court of Justice: `bg_case_get` with `celex` (62018CJ0311, C-311/18
   or "Schrems II") and `paragraph` for one numbered point.
 
+Two dates can both be true: `version.issue` is the act's latest amendment, while an article may carry its
+own in-text note (`изм. - ДВ, бр. 85 от 2023 г.`). If they differ, give both and say which is which.
+
 When you quote a provision or a decision, add `source.attribution` and `source.url`, and the version:
 for a Bulgarian act `version.issue` (the ДВ issue and date of the last amendment, plus `gazette_latest`),
 for an EU act `version.consolidated_as_of`. If `stale` is true, say the source could not be reached and
