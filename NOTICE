@@ -1,0 +1,11 @@
+hermes-bg-eu-law
+Copyright (c) 2026 Apostol Apostolov
+
+Portions of this software are derived from hermes-de-law
+(https://github.com/MadeByBrain/hermes-de-law), Copyright (c) 2026 MadeByBrain,
+released under the MIT License. Those portions keep their original copyright and
+are reused here under the same terms.
+
+The full MIT license text is in LICENSE. Keep that file canonical: added
+notices belong here, because an edited license text stops being machine
+identifiable to GitHub.
