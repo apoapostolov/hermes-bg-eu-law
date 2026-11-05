@@ -16,7 +16,6 @@ import argparse
 import importlib.util
 import json
 import os
-import re
 import sys
 import tempfile
 import time
@@ -42,7 +41,7 @@ def load_plugin():
 
 
 plugin = load_plugin()
-from bg_law_live import client, eu, lsource, tools  # noqa: E402
+from bg_law_live import client, tools  # noqa: E402
 
 RESULTS: list[tuple[str, str, bool, str]] = []
 GROUP = "general"
@@ -286,7 +285,7 @@ def eu_articles():
     prov = gdpr.get("provision") or {}
     check("ОРЗД resolves from the Bulgarian name", "ОРЗД" in json.dumps(gdpr.get("law"), ensure_ascii=False),
           json.dumps(gdpr.get("law"), ensure_ascii=False))
-    check("GDPR text is Bulgarian", "законосъобразно" in prov.get("text", "").lower(),
+    check("GDPR text is Bulgarian", "легитимните интереси" in prov.get("text", "").lower(),
           prov.get("text", "")[:200])
     check("GDPR pin names the letter", "е" in (prov.get("citation") or ""), str(prov.get("citation")))
     check("EU result carries a CELEX",
@@ -298,7 +297,7 @@ def eu_articles():
 
     en = ok_call("bg_law_get", citation="Art. 6(1)(f) GDPR", language="en")
     text = (en.get("provision") or {}).get("text", "")
-    check("English edition returns English", "lawful" in text.lower(), text[:200])
+    check("English edition returns English", "legitimate interests" in text.lower(), text[:200])
     check("the two languages are the same provision",
           len(text) > 60 and "processing" in text.lower(), text[:160])
 

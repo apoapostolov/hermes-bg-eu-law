@@ -15,6 +15,7 @@ from __future__ import annotations
 import json
 import re
 import time
+import threading
 import urllib.parse
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -78,7 +79,7 @@ KNOWN_CASES: List[Dict[str, Any]] = [
     {"celex": "62018CJ0311", "name": "Schrems II", "aliases": ["Schrems II", "Шремс II", "C-311/18"]},
     {"celex": "62014CJ0362", "name": "Schrems I", "aliases": ["Schrems I", "Шремс I", "C-362/14"]},
     {"celex": "62012CJ0131", "name": "Google Spain", "aliases": ["Google Spain", "C-131/12"]},
-    {"celex": "62015CJ0582", "name": "Tele2 Sverige", "aliases": ["Tele2", "C-203/15", "C-698/15"]},
+    {"celex": "62015CJ0203", "name": "Tele2 Sverige", "aliases": ["Tele2", "C-203/15", "C-698/15"]},
 ]
 
 _CELEX = re.compile(r"^(?:celex[:\s]*)?([0-9])(\d{4})([A-Z]{1,2})(\d{4})(?:-(\d{8}))?$", re.I)
@@ -123,9 +124,12 @@ def match_eu(name: str) -> Optional[Dict[str, Any]]:
     if act:
         return dict(act)
     m = _CELEX.match(raw.replace(" ", ""))
-    if m and m.group(1) == "3":
+    if m and m.group(1) in ("0", "3"):
         celex = f"3{m.group(2)}{m.group(3).upper()}{m.group(4)}"
-        return dict(_KNOWN.get(_key(celex)) or {"celex": celex, "bg": celex, "en": celex, "aliases": []})
+        act = dict(_KNOWN.get(_key(celex)) or {"celex": celex, "bg": celex, "en": celex, "aliases": []})
+        if m.group(5):
+            act["document"] = f"0{celex[1:]}-{m.group(5)}"
+        return act
     for rx, kind in ((_NUMBERED, "numbered"), (_OLD_DIR, "olddir")):
         m = rx.search(raw)
         if not m:
@@ -148,7 +152,8 @@ def search_known(query: str) -> List[Dict[str, Any]]:
     out = []
     for act in KNOWN_ACTS:
         names = [act["bg"], act["en"], *act["aliases"], act["celex"]]
-        if any(q and (q in fold(n) or fold(n) == q) for n in names):
+        if any(q and (re.search(r"(?<!\w)" + re.escape(q) + r"(?!\w)", fold(n))
+                      if len(q) <= 3 else q in fold(n)) for n in names):
             if act not in out:
                 out.append(act)
     m = match_eu(query)
@@ -170,6 +175,10 @@ def match_case(name: str) -> Optional[Dict[str, Any]]:
     if m and m.group(1) == "6":
         celex = f"6{m.group(2)}{m.group(3).upper()}{m.group(4)}"
         return dict(next((c for c in KNOWN_CASES if c["celex"] == celex), {"celex": celex, "name": celex, "aliases": []}))
+    number = re.fullmatch(r"([CT])-([0-9]{1,4})/([0-9]{2}|[0-9]{4})", raw, re.I)
+    if number:
+        celex = f"6{_year4(number[3])}{number[1].upper()}J{int(number[2]):04d}"
+        return {"celex": celex, "name": celex, "aliases": [], "requested_case": raw}
     return None
 
 
@@ -240,8 +249,43 @@ def _parse_judgment(body: bytes, resp: Response) -> Dict[str, Any]:
 class EuLaw:
     def __init__(self, store: Store):
         self.store = store
+        self._local = threading.local()
+
+    def search(self, query, limit=10, offset=0, court=False, kind=""):
+        literal = json.dumps(query.lower(), ensure_ascii=True)
+        words = [w for w in re.findall(r"\w+", query.lower()) if len(w) > 2
+                 and w not in ("the", "and", "for", "with")][:12]
+        if not words:
+            raise LawError("bad_argument", "Give at least one title word of three or more characters.")
+        expression = json.dumps(" AND ".join("'" + w + "'" for w in words), ensure_ascii=True)
+        selector = 'STRSTARTS(STR(?celex), "6")' if court else 'STRSTARTS(STR(?celex), "3")'
+        if kind:
+            code = {"регламент": "R", "директива": "L", "решение": "D"}.get(kind)
+            if not code:
+                raise LawError("bad_argument", "EU kind must be регламент, директива or решение.")
+            selector += f' && REGEX(STR(?celex), "^3[0-9]{{4}}{code}")'
+        sparql = ("PREFIX cdm: <http://publications.europa.eu/ontology/cdm#> PREFIX bif: <bif:> "
+                  "SELECT DISTINCT ?celex ?title WHERE { ?e cdm:expression_title ?title . "
+                  f"?title bif:contains {expression} . "
+                  "?e cdm:expression_belongs_to_work ?w . ?w cdm:resource_legal_id_celex ?celex . "
+                  f"FILTER({selector}) FILTER(CONTAINS(LCASE(STR(?title)), {literal})) "
+                  f"}} ORDER BY ?celex LIMIT {limit + 1} OFFSET {offset}")
+        url = SPARQL + "?" + urllib.parse.urlencode({"query": sparql, "format": "application/sparql-results+json"})
+        def parse(body, _response):
+            try:
+                rows = json.loads(body)["results"]["bindings"]
+                results = [{"jurisdiction": "EU", "law": r["celex"]["value"], "celex": r["celex"]["value"],
+                            "title": r["title"]["value"]} for r in rows]
+            except (ValueError, KeyError, TypeError) as err:
+                raise LawError("bad_response", "The EU search response could not be read.") from err
+            return {"results": results[:limit], "offset": offset,
+                    "next_offset": offset + limit if len(results) > limit else None,
+                    "has_more": len(results) > limit, "scope": "CELLAR metadata title search"}
+        return self.store.fetch(f"p{PARSE_VERSION}-eu-search-{query}-{limit}-{offset}-{court}-{kind}", url, parse,
+                                headers={"Accept": "application/sparql-results+json"})
 
     def versions(self, celex: str) -> List[str]:
+        self._local.versions = None
         base = celex[1:]  # 32016R0679 -> 2016R0679
         query = ("PREFIX cdm: <http://publications.europa.eu/ontology/cdm#> "
                  "SELECT DISTINCT ?celex WHERE { ?w cdm:resource_legal_id_celex ?celex . "
@@ -253,6 +297,7 @@ class EuLaw:
                 got = self.store.fetch(f"p{PARSE_VERSION}-eu-versions-{celex}", url, _parse_sparql,
                                        headers={"Accept": "application/sparql-results+json"},
                                        max_bytes=2 * 1024 * 1024)
+                self._local.versions = got
                 return [c for c in got.data if re.fullmatch(r"0\d{4}[A-Z]{1,2}\d{4}-\d{8}", c)]
             except LawError as err:
                 last = err
@@ -265,6 +310,8 @@ class EuLaw:
         try:
             versions = self.versions(celex)
         except LawError as err:
+            if self.store.setting("allow_stale", True) is False:
+                raise
             return celex, None, f"Consolidated versions could not be listed ({err.message}); original text used."
         today = time.strftime("%Y%m%d")
         valid = sorted(v for v in versions if v[-8:] <= today)
@@ -277,13 +324,13 @@ class EuLaw:
         return self.store.fetch(
             f"p{PARSE_VERSION}-eu-doc-{doc_id}-{lang}", CELLAR + doc_id, _parse_doc,
             headers={"Accept": "application/xhtml+xml", "Accept-Language": LANG_CODES.get(lang, "bul")},
-            immutable=True)
+            immutable=False)
 
     def judgment(self, celex: str, lang: str):
         return self.store.fetch(
             f"p{PARSE_VERSION}-eu-case-{celex}-{lang}", CELLAR + celex, _parse_judgment,
             headers={"Accept": "application/xhtml+xml", "Accept-Language": LANG_CODES.get(lang, "bul")},
-            immutable=True)
+            immutable=False)
 
 
 def unit_id(kind: str, number: str) -> Optional[str]:

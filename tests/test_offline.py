@@ -336,7 +336,7 @@ class BgLawToolTests(unittest.TestCase):
         _, h, web = make()
         web.add(r"articles/344\?as_of=2026-01-01$", json.dumps(
             {"id": "kodeks-na-truda", "law": "Кодекс на труда", "number": "344", "ref": "чл. 344",
-             "scope": "", "text": "Чл. 344. (1) Стара редакция."}).encode(),
+             "scope": "", "at_date": "2026-01-01", "text": "Чл. 344. (1) Стара редакция."}).encode(),
             {"content-type": "application/json"})
         r = call(h, "bg_law_get", citation="чл. 344, ал. 1 КТ", as_of="2026-01-01")
         self.assertTrue(r["ok"], r)
@@ -409,7 +409,7 @@ class BgLawToolTests(unittest.TestCase):
         self.assertEqual(r["gazette_chain"]["total"], len(expected))
         self.assertEqual(len(r["gazette_chain"]["entries"]), 2)
         self.assertEqual(r["point_in_time"]["versions"][0]["issue"], "ДВ бр. 89/2026")
-        self.assertIn("Point-in-time text exists from", r["point_in_time"]["limitation"])
+        self.assertIn("Reliable point-in-time text begins at", r["point_in_time"]["limitation"])
 
     def test_language_setting(self):
         _, h, _ = make(settings={"language": "en"})
@@ -425,7 +425,7 @@ class EuToolTests(unittest.TestCase):
         self.assertEqual(r["jurisdiction"], "EU")
         self.assertEqual(r["provision"]["id"], "art_6")
         self.assertEqual(r["provision"]["title"], "Законосъобразност на обработването")
-        self.assertTrue(r["provision"]["text"].startswith("1. Обработването"), r["provision"]["text"][:60])
+        self.assertTrue(r["provision"]["text"].startswith("е)"), r["provision"]["text"][:60])
         self.assertEqual(r["provision"]["citation"], "чл. 6, пар. 1, б. „е“ от ОРЗД")
         self.assertIn("CC BY 4.0", r["source"]["attribution"])
         self.assertTrue(all("eur-lex.europa.eu" not in url for url, _ in web.calls))
@@ -601,6 +601,7 @@ def as_of_body(marker: str) -> bytes:
     """Synthetic: the same article served as it stood on an older reconstruction."""
     data = payload("article_344.json")
     data["text"] = f"\u0427\u043b. 344. (1) {marker}"
+    data["at_date"] = "2026-07-31"
     return json.dumps(data, ensure_ascii=False).encode("utf-8")
 
 

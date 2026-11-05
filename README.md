@@ -18,11 +18,11 @@ with the same confidence. Removing that failure mode is the whole point.
 The same rule runs through the other two jurisdictions. EU acts are read from the Publications Office in
 Bulgarian or English, in the consolidated version where one exists, so `чл. 6, пар. 1, б. „е“ ОРЗД` and
 `Art. 6(1)(f) GDPR` return the same provision in two languages. Case law is read, not summarised: an act
-of the Конституционен съд comes back in full, and a judgment of the Court of Justice can be read one
-numbered point at a time, as in `Schrems II`, point 201.
+of the Конституционен съд can be read across consecutive pages, and a judgment of the Court of Justice
+can be read one numbered point at a time, as in `Schrems II`, point 201.
 
-Texts are cached on disk, so a second question about the same act costs nothing and a network outage
-does not take the answers with it.
+Texts are cached on disk. Repeated lookups reuse the copy until its recheck interval expires. During
+a source outage, the plugin can return a dated cached copy with a warning, or require a fresh check.
 
 ## Install
 
@@ -34,14 +34,18 @@ hermes plugins enable bg-law
 Bulgarian statute text needs a free lsource.net key. Register at
 [lsource.net/developers](https://lsource.net/developers), create a key, and paste it into
 Settings, Plugins, bg-law. It is stored in `.env` as `LSOURCE_API_KEY` and never in `config.yaml`. The
-quota is 60 requests a minute and 5,000 a day, which the plugin stays clear of with one request per
-second and the cache.
+default quota is 60 requests a minute and 5,000 a day. Requests are paced across processes sharing a
+profile, and rate-limit errors preserve the source's retry guidance.
 
-Hermes loads plugin code at startup, so the six tools appear in the next session.
+Press **Test connection** to check access to each source. The custom page is available while bg-law
+is enabled; the generic Agent settings form remains available while the plugin is disabled.
+
+Restart Hermes after an update, then start a new session to load the eleven tools. Existing keys and settings are
+retained. The cache schema changes in 1.0.2, so legal responses are fetched and parsed again.
 
 ## What it accepts
 
-Citations go in as people write them, not in a form invented by the schema: `чл. 344, ал. 2, т. 3 КТ`,
+Citations go in as people write them, not in a form invented by the schema: `чл. 344, ал. 1, т. 3 КТ`,
 `§ 1 ЗЗД`, `чл. 5 от Конституцията`, `чл. 6, ал. 1 от Закона за защита на личните данни`, `КТ чл. 344`,
 `Art. 6(1)(f) GDPR`, `съображение 47 ОРЗД`, `приложение III Регламент за ИИ`. A Latin letter typed for a
 Cyrillic suffix is understood, so `чл. 2a` finds `чл. 2а`, and the definite article does not matter:
@@ -51,16 +55,21 @@ The 25 abbreviations Bulgarian lawyers actually write are resolved directly, amo
 ГПК, АПК, ЗЗД, ТЗ, СК, ЗН, ЗС, КСО, ЗДДС, ДОПК, ЗУТ, ЗЗЛД and ЗОП. Each row in that table was checked
 against the live corpus, because a wrong abbreviation silently returns a plausible wrong act.
 
-## The six tools
+## Tools
 
 | Tool | What it does |
 | --- | --- |
-| `bg_law_get` | One article and one алинея of a Bulgarian act, or one article, recital or annex of an EU act |
-| `bg_law_search` | An act by abbreviation or title word, plus the well-known EU acts |
+| `bg_law_get` | A provision with validated paragraph, point or letter selection; dated BG text and explicit BG/EU revisions |
+| `bg_law_search` | BG titles and abbreviations; `jurisdiction="EU"` searches CELLAR titles beyond the local aliases |
 | `bg_law_toc` | The act's articles with the глава and раздел each sits in, filterable by a word, with a snippet |
 | `bg_law_history` | The full ДВ promulgation chain and status of a Bulgarian act, or the consolidated versions of an EU act |
-| `bg_case_search` | Constitutional Court acts by case number, act type, date range or keyword |
-| `bg_case_get` | One Constitutional Court act, or one numbered point of a CJEU judgment |
+| `bg_case_search` | Constitutional Court filters and bounded keyword scans; `court="EU"` searches EU decision titles |
+| `bg_case_get` | A Constitutional Court act or EU judgment, with continuation and numbered CJEU points |
+| `bg_law_changes` | A diff between BG revision dates, or the change introduced by one revision hash |
+| `bg_law_transposition` | BG/EU relationships with the sentences claiming implementation |
+| `bg_law_recent` | Recent corpus amendments with their ДВ issues |
+| `bg_law_export` | Paginated act text or Akoma Ntoso XML |
+| `bg_law_status` | Redacted configuration, cache size and optional live source checks |
 
 A result looks like this (trimmed):
 
@@ -91,8 +100,8 @@ client-rendered shell for a law, with the text arriving from JavaScript. lex.bg,
 most people use, answers with `User-agent: * Disallow: /`, so it is not touched.
 
 That leaves [lsource.net](https://lsource.net), which reconstructs the consolidated text from the State
-Gazette and publishes it under CC BY 4.0: 6,585 Bulgarian acts in force, 13,629 including the repealed
-ones, with the amendment history and a text as of a past date where the reconstruction reaches back. It
+Gazette and publishes it under CC BY 4.0, with amendment history and dated text where the reconstruction
+reaches back. The API includes repealed acts because historical queries need them. It
 needs the free key, and it marks every record `official: false`, which the plugin repeats in every answer.
 
 One consequence worth knowing before scraping it by hand: the public act page at `/laws/<id>` is a free
@@ -135,52 +144,62 @@ The rest of the vocabulary is stable enough to branch on: `bad_argument` for inp
 three source hosts, `disabled` when a feature is switched off in settings, and `internal` if the plugin
 itself fails. Every error carries a `next_step` a model can act on.
 
-`as_of` works only where the corpus has a reconstructed history, and that varies per act: Кодекс на труда
-carries two versions from 31.07.2026, Наказателен кодекс carries none. A date between two snapshots is
-served from the newest version at or before it, and the answer reports `as_of_used` so the text can be
-dated correctly. A date before the reconstruction reaches returns `as_of_not_available` with the coverage
-it does have, instead of a snapshot that does not exist.
+`as_of` selects the revision **promulgated by** the requested date. It does not determine when each
+provision took effect. Responses preserve the source's actual revision date in `as_of_used` and the
+quoted revision's issue in `version.issue`; current whole-act status remains separate. Missing,
+empty or newer historical text is refused. Repeated transitional section numbers are reported as
+ambiguous rather than choosing the first one.
 
-If a source cannot be reached, the last cached copy is served with `stale: true` and the date it was
-fetched. Text cut at `max_chars` reports `truncated: true` with the character count, so a partial quote is
-never presented as the whole provision.
+For an exact version, pass `revision` from `bg_law_history`: a BG revision hash or an EU consolidated
+CELEX such as `02016R0679-20160504`. An unavailable EU snapshot never falls back to the original.
+Recitals belong to the original publication and must be requested without a consolidated revision.
+
+Long responses expose `next_offset`. Repeat the same provision, language and revision with that
+offset to continue. Court decision pages use `parts.next_offset`, statute pages use
+`provision.next_offset`, and exports use `document.next_offset`.
 
 ## Settings
 
-| Key | Default | Meaning |
-| --- | --- | --- |
-| `lsource_api_key` | empty | Free key from lsource.net/developers. Stored in `.env` as `LSOURCE_API_KEY`. |
-| `language` | `auto` | Language of the attribution line: `auto`, `bg` or `en`. |
-| `eu_language` | `bg` | Default language of EU texts. |
-| `max_age_hours` | 24 | Cached acts older than this are revalidated with the source. `0` = always. |
-| `cache_max_mb` | 200 | Oldest cached texts are dropped beyond this. |
-| `case_law` | true | Allow `bg_case_search` and `bg_case_get`. |
-| `eu_law` | true | Allow EU acts. |
+The settings page groups connection checks, sources, languages, cache behavior and diagnostics.
+Bulgarian legislation, EU legislation, the Constitutional Court and EU courts have separate switches.
+The older combined `case_law` switch still works; saving source choices migrates it without enabling
+sources that were previously off.
 
-## How this was checked
+The recheck interval applies to every source, including EU snapshots and court indexes. `0` means
+recheck every lookup. **Require a fresh source check** refuses expired copies during an outage;
+**Allow cached copy with a warning** returns the copy with its check date. The default interval is
+24 hours and the cache target is 200 MB. The response currently being read can exceed that target.
 
-Against the live sources on 26.10.2026, on Windows 11 with Python 3.11: `чл. 344, ал. 1 КТ` (ДВ бр.
-89/2026, 129 gazette entries), `чл. 2а КТ`, `чл. 12 КТ` (repealed, flagged as such), `чл. 5 от
-Конституцията`, `чл. 115 НК`, `чл. 6, ал. 1 ЗЗЛД`, `чл. 9999 КТ` (`article_not_found`, no guess),
-`чл. 6, пар. 1, б. „е“ ОРЗД` and `Art. 6(1)(f) GDPR` (consolidated 2016-05-04), `съображение 47 ОРЗД`,
-`чл. 50` and `приложение III` of the AI Act, `bg_case_search` for к.д. 15/2026 (seven acts, ambiguous on
-read, then read by `doc_id`), and `Schrems II` point 201.
+**Recheck on next lookup** expires cached responses without deleting their offline copies.
+**Clear cache** removes downloaded legal responses. Diagnostics export includes settings, source checks
+and cache totals; it excludes credentials, cached text and local paths. The local cache itself retains
+request URLs, which can include search terms.
 
-`python -m unittest discover -s tests` runs 63 offline tests over response fixtures trimmed from those
-real payloads, with no network. `python scripts/live_check.py` runs 184 live checks in ten groups (reading,
-negative paths, structure, EU, case law, limits, resilience, hostile input, concurrency, attribution)
-against all three sources with a throwaway cache, and every defect listed in the changelog was found by
-it: exact error types, the ДВ issue, per-host request spacing, warm and stale cache behaviour, six
-concurrent lookups, and a JSON parse of every cache file. `hermes plugins validate` passes the manifest,
-registration, collision and security gates (6 tools, 0 hooks). The Bulgarian parser is the part most likely to drift when the source
-changes its layout, which is why the cache key carries a parser version and a parser fix invalidates
-cached parses instead of serving them.
+See [the tool and settings reference](docs/reference.md) for parameters, coverage and API behavior.
+
+## Validation
+
+```text
+python -m unittest discover -s tests -v
+python scripts/live_check.py
+python scripts/audit_check.py
+hermes plugins validate . --json
+```
+
+The offline suite has 90 tests, including six HTTP settings tests that require FastAPI and httpx.
+Those six are skipped when the optional host packages are unavailable. The two live scripts require
+`LSOURCE_API_KEY`; they use disposable caches and check the original workflows plus historical
+identity, exact pinpoints, Tele2, snapshots, changes, transposition, export and EU title discovery.
+
+The settings component was checked in a local preview using Hermes SDK controls and styles, including
+connection feedback, invalid input, recovery and cache actions at desktop and narrow widths. The preview
+uses sample connection state; HTTP tests cover the actual settings routes separately.
 
 ## Licence and limits
 
 MIT, see LICENSE. The HTTP, cache and CELLAR layers derive from
 [hermes-de-law](https://github.com/MadeByBrain/hermes-de-law) by MadeByBrain (MIT), credited in the
-LICENSE file.
+NOTICE file.
 
 It returns legal texts, not legal advice. The State Gazette and the Official Journal bind, not this
 plugin. For a real case the user needs a lawyer.

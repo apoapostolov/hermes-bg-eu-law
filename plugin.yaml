@@ -1,9 +1,9 @@
 name: bg-law
-version: 1.0.1
+version: 1.0.2
 manifest_version: 2
 api_version: 1
 requires_hermes: ">=0.22.2"
-description: "Bulgarian and EU law for Hermes: read one provision (чл. 344, ал. 1 КТ, чл. 6, ал. 1 ОРЗД, Art. 50 AI Act) in the source wording with the Държавен вестник reference, status, source line and gazette chain, search the Bulgarian act corpus, list a law's articles, follow its amendment history by ДВ issue, and read decisions of the Constitutional Court or a judgment of the Court of Justice of the EU. Sources: lsource.net (free API key, consolidated texts reconstructed from Държавен вестник, CC BY 4.0), the Publications Office of the EU (CELLAR) and the Bulgarian Constitutional Court. Texts are cached locally. Legal texts, not legal advice."
+description: "Bulgarian and EU law for Hermes: read one provision (чл. 344, ал. 1 КТ, чл. 6, ал. 1 ОРЗД, Art. 50 AI Act) in the source wording with the Държавен вестник reference, status, source line and gazette chain, search the Bulgarian act corpus, list a law's articles, follow its amendment history and diffs by ДВ issue, inspect BG/EU transposition claims, export structured XML, check source access, and read decisions of the Constitutional Court or a judgment of the Court of Justice of the EU. Sources: lsource.net (free API key, consolidated texts reconstructed from Държавен вестник, CC BY 4.0), the Publications Office of the EU (CELLAR) and the Bulgarian Constitutional Court. Texts are cached locally. Legal texts, not legal advice."
 author: apoapostolov
 license: MIT
 homepage: https://github.com/apoapostolov/hermes-bg-eu-law
@@ -15,6 +15,11 @@ provides_tools:
   - bg_law_history
   - bg_case_search
   - bg_case_get
+  - bg_law_changes
+  - bg_law_transposition
+  - bg_law_recent
+  - bg_law_status
+  - bg_law_export
 provides_hooks: []
 config_schema:
   lsource_api_key:
@@ -26,7 +31,7 @@ config_schema:
     type: str
     choices: [auto, bg, en]
     default: auto
-    label: "Source line language"
+    label: "Attribution language"
     description: "Language of the attribution line in results. auto = the language of the text (Bulgarian for Bulgarian law)."
   eu_language:
     type: str
@@ -42,8 +47,28 @@ config_schema:
   cache_max_mb:
     type: int
     default: 200
-    label: "Cache size limit (MB)"
-    description: "Oldest cached texts are deleted when the cache grows beyond this size."
+    label: "Cache target (MB)"
+    description: "5 to 10000 MB. Oldest responses are removed first; the document currently being read is retained."
+  allow_stale:
+    type: bool
+    default: true
+    label: "Allow cached copy during source outages"
+    description: "Cached answers carry a stale warning and their check dates. Disable to require a fresh source check."
+  bg_law:
+    type: bool
+    default: true
+    label: "Bulgarian legislation"
+    description: "Allow lsource statute text, history, changes and transposition lookups."
+  bg_cases:
+    type: bool
+    default: true
+    label: "Constitutional Court"
+    description: "Allow published Bulgarian Constitutional Court acts."
+  eu_cases:
+    type: bool
+    default: true
+    label: "EU courts"
+    description: "Allow CJEU and General Court decisions from the Publications Office."
   case_law:
     type: bool
     default: true

@@ -5,7 +5,7 @@ paced to at most one request per second per host, has a socket timeout and a
 response size cap. Redirects are followed by hand and only to allowed hosts.
 
 The cache lives under <HERMES_HOME>/plugin-data/bg-law/cache/. It holds public
-legal texts and indexes only (never a user's question). Writes are atomic
+legal responses and request URLs, which can contain search terms. Credentials are never cached. Writes are atomic
 (temp file + os.replace), so parallel Hermes processes can share it.
 """
 
@@ -15,6 +15,7 @@ import gzip
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import tempfile
@@ -39,6 +40,7 @@ TIMEOUT_S = 30
 MAX_REDIRECTS = 5
 MIN_INTERVAL_S = 1.0
 DEFAULT_MAX_BYTES = 40 * 1024 * 1024
+_PACE_LOCK = threading.Lock()
 
 
 class LawError(Exception):
@@ -68,6 +70,8 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 def _check_url(url: str) -> str:
     parts = urllib.parse.urlsplit(url)
     host = (parts.hostname or "").lower()
+    if parts.username or parts.password or parts.port not in (None, 443, 80):
+        raise LawError("host_not_allowed", "Source URLs cannot contain credentials or custom ports.")
     if host not in ALLOWED_HOSTS:
         raise LawError("host_not_allowed",
                        f"Refused to contact {host or url!r}: not one of the plugin's source hosts.")
@@ -88,12 +92,38 @@ class Http:
         self.requests = 0
 
     def _pace(self, host: str) -> None:
-        with self._lock:
-            now = time.monotonic()
-            wait = self._last.get(host, 0.0) + MIN_INTERVAL_S - now
-            if wait > 0:
-                time.sleep(wait)
-            self._last[host] = time.monotonic()
+        if MIN_INTERVAL_S <= 0:
+            return
+        with _PACE_LOCK:
+            path = hermes_home() / "plugin-data" / "bg-law" / (host + ".pace")
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with open(path, "a+b") as handle:
+                if handle.seek(0, os.SEEK_END) == 0:
+                    handle.write(b"0"); handle.flush()
+                handle.seek(0)
+                if os.name == "nt":
+                    import msvcrt
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+                try:
+                    handle.seek(0)
+                    try:
+                        last = float(handle.read().decode())
+                    except ValueError:
+                        last = 0
+                    wait = min(MIN_INTERVAL_S, last + MIN_INTERVAL_S - time.time())
+                    if wait > 0:
+                        time.sleep(wait)
+                    handle.seek(0); handle.truncate()
+                    handle.write(str(time.time()).encode()); handle.flush()
+                finally:
+                    handle.seek(0)
+                    if os.name == "nt":
+                        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+                    else:
+                        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     @staticmethod
     def _urllib(url: str, headers: Dict[str, str]) -> Response:
@@ -139,6 +169,9 @@ class Http:
                 if not loc:
                     raise LawError("bad_response", f"{host} sent a redirect without a target.")
                 url = _check_url(urllib.parse.urljoin(url, loc))
+                if urllib.parse.urlsplit(url).hostname != host:
+                    hdrs = {k: v for k, v in hdrs.items()
+                            if k.lower() not in ("authorization", "x-api-key", "cookie")}
                 continue
             body = resp.body
             if resp.headers.get("content-encoding", "").lower() == "gzip" and body:
@@ -198,8 +231,8 @@ class Cache:
         return root
 
     def _paths(self, key: str):
-        base = self.root / _safe_key(key)
-        return base.with_suffix(".json"), base.with_suffix(".meta")
+        base = self.root / ("entry-" + hashlib.sha256(key.encode()).hexdigest())
+        return Path(str(base) + ".json"), Path(str(base) + ".meta")
 
     def read(self, key: str):
         data_p, meta_p = self._paths(key)
@@ -209,21 +242,26 @@ class Cache:
         except (OSError, ValueError):
             return None, None
         memo = self._memo.get(key)
-        if memo and memo[0] == stat.st_mtime_ns:
+        if memo and memo[0] == stat.st_mtime_ns and memo[2] == meta.get("sha256"):
             return memo[1], meta
         try:
-            data = json.loads(data_p.read_text(encoding="utf-8"))
+            raw = data_p.read_bytes()
+            if meta.get("sha256") != hashlib.sha256(raw).hexdigest():
+                return None, None  # interrupted or interleaved data/meta writes
+            data = json.loads(raw.decode("utf-8"))
         except (OSError, ValueError):
             return None, None
         with self._lock:
             if len(self._memo) > 24:
                 self._memo.clear()
-            self._memo[key] = (stat.st_mtime_ns, data)
+            self._memo[key] = (stat.st_mtime_ns, data, meta.get("sha256"))
         return data, meta
 
     def write(self, key: str, data: Any, meta: Dict[str, Any]) -> None:
         data_p, meta_p = self._paths(key)
-        _atomic_write(data_p, json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        raw = json.dumps(data, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+        meta = dict(meta, sha256=hashlib.sha256(raw).hexdigest())
+        _atomic_write(data_p, raw)
         _atomic_write(meta_p, json.dumps(meta).encode("utf-8"))
 
     def write_meta(self, key: str, meta: Dict[str, Any]) -> None:
@@ -234,7 +272,7 @@ class Cache:
 
     def prune(self, max_bytes: int, keep: tuple = ()) -> int:
         """Delete least recently fetched entries until the cache fits. Returns entries removed."""
-        keep_names = {_safe_key(k) for k in keep}
+        keep_names = {self._paths(k)[1].stem for k in keep}
         entries = []
         total = 0
         for meta_p in self.root.glob("*.meta"):
@@ -298,7 +336,15 @@ class Store:
             hours = float(self.setting("max_age_hours", 24))
         except (TypeError, ValueError):
             hours = 24.0
-        return max(0.0, hours) * 3600
+        return max(0.0, min(hours, 8760)) * 3600 if math.isfinite(hours) else 86400
+
+    def _stale(self, data, meta, error):
+        allowed = self.setting("allow_stale", True)
+        if isinstance(allowed, str):
+            allowed = allowed.lower() not in ("false", "0", "off", "no")
+        if not allowed:
+            raise error
+        return Cached(data, "stale", meta.get("fetched_at", 0), meta)
 
     def fetch(self, key: str, url: str, parse: Callable[[bytes, Response], Any], *,
               max_age_s: Optional[float] = None, headers: Optional[Dict[str, str]] = None,
@@ -319,15 +365,15 @@ class Store:
             resp = self.http.get(url, cond, max_bytes=max_bytes)
         except LawError as err:
             if data is not None and err.kind in ("network", "timeout", "upstream", "rate_limited"):
-                return Cached(data, "stale", meta.get("fetched_at", 0), meta)
+                return self._stale(data, meta, err)
             raise
         if resp.status == 304 and data is not None:
             meta.update(fetched_at=now, used_at=now)
             self.cache.write_meta(key, meta)
             return Cached(data, "revalidated", now, meta)
         if resp.status != 200:
-            if data is not None and resp.status >= 500:
-                return Cached(data, "stale", meta.get("fetched_at", 0), meta)
+            if data is not None and (resp.status >= 500 or resp.status == 429):
+                return self._stale(data, meta, _status_error(resp))
             raise _status_error(resp)
         parsed = parse(resp.body, resp)
         new_meta = {"url": resp.url, "fetched_at": now, "used_at": now,
@@ -350,6 +396,8 @@ class Store:
             limit_mb = float(self.setting("cache_max_mb", 200))
         except (TypeError, ValueError):
             limit_mb = 200.0
+        if not math.isfinite(limit_mb):
+            limit_mb = 200.0
         try:
             self.cache.prune(int(max(limit_mb, 5) * 1024 * 1024), keep=(key,))
         except OSError:
@@ -358,13 +406,20 @@ class Store:
 
 def _status_error(resp: Response) -> LawError:
     host = urllib.parse.urlsplit(resp.url).hostname
+    try:
+        body = json.loads(resp.body.decode("utf-8"))
+        reason = str(body.get("error", ""))[:300] if isinstance(body, dict) else ""
+    except (ValueError, UnicodeError):
+        reason = ""
+    details = {"status": resp.status, "reason": reason}
     if resp.status in (401, 403):
         return LawError("unauthorized",
                         f"{host} refused the request (HTTP {resp.status}): the API key is missing, wrong or out of quota.",
                         "Set the lsource.net API key in this plugin's settings (free key at "
                         "https://lsource.net/developers), then retry.")
     if resp.status == 404:
-        return LawError("not_found", f"{host} has no document at {resp.url} (HTTP 404).")
+        return LawError("not_found", f"{host} has no document at {resp.url} (HTTP 404).",
+                        "Check the identifier and history coverage.", details)
     if resp.status == 409:
         return LawError("withheld",
                         f"{host} withheld this text (HTTP 409): the corpus audit flagged it as unreliable.",
@@ -372,7 +427,8 @@ def _status_error(resp: Response) -> LawError:
                         "is withheld.")
     if resp.status == 429:
         return LawError("rate_limited", f"{host} answered HTTP 429 (rate limit).",
-                        "Wait a minute, then retry once.")
+                        "Wait for Retry-After or at least a minute before retrying.",
+                        dict(details, retry_after=resp.headers.get("retry-after", "60")))
     if resp.status == 202:
         return LawError("upstream", f"{host} answered HTTP 202 (request queued or bot check).",
                         "Try again later.")

@@ -11,6 +11,7 @@ Robots: constcourt.bg allows every path except /control/.
 from __future__ import annotations
 
 import re
+import threading
 from typing import Any, Dict, List, Optional, Tuple
 
 from .client import LawError, Response, Store
@@ -105,18 +106,33 @@ def _parse_act(body: bytes, resp: Response) -> Dict[str, Any]:
 class CaseLaw:
     def __init__(self, store: Store):
         self.store = store
+        self._local = threading.local()
+
+    @property
+    def last_failures(self):
+        return getattr(self._local, "failures", [])
+
+    @last_failures.setter
+    def last_failures(self, value):
+        self._local.failures = value
+
+    @property
+    def scan_copies(self):
+        return getattr(self._local, "copies", [])
 
     def index(self):
-        return self.store.fetch(f"p{PARSE_VERSION}-cc-index", LIST_URL, _parse_index, max_age_s=INDEX_MAX_AGE_S)
+        return self.store.fetch(f"p{PARSE_VERSION}-cc-index", LIST_URL, _parse_index)
 
     def rows(self) -> List[Dict[str, str]]:
         return list(self.index().data)
 
     def search(self, case_number: Optional[str] = None, date_from: Optional[str] = None,
                date_to: Optional[str] = None, act_type: Optional[str] = None,
-               query: Optional[str] = None, scan_limit: int = 8) -> Tuple[List[Dict[str, str]], int, bool]:
+               query: Optional[str] = None, scan_limit: int = 8, scan_offset: int = 0) -> Tuple[List[Dict[str, str]], int, bool]:
         """(rows, scanned, capped). A keyword search scans up to ``scan_limit`` acts, newest first."""
         rows = self.rows()
+        self._local.copies = []
+        self.last_failures = []
         num = re.sub(r"[^\d/]", "", case_number or "")
         want_num, want_year = "", ""
         if num:
@@ -144,15 +160,17 @@ class CaseLaw:
         hits: List[Dict[str, str]] = []
         scanned = 0
         capped = False
-        for row in filtered:
+        self.last_failures = []
+        for row in filtered[scan_offset:]:
             if scanned >= max(1, scan_limit):
                 capped = True
                 break
+            scanned += 1
             try:
                 act = self.act(row["doc_id"])
-            except LawError:
+            except LawError as err:
+                self.last_failures.append({"doc_id": row["doc_id"], "error_type": err.kind})
                 continue
-            scanned += 1
             text = act["text"]
             pos = fold(text).find(needle)
             if pos < 0:
@@ -162,13 +180,17 @@ class CaseLaw:
         return hits, scanned, capped
 
     def act(self, doc_id: str) -> Dict[str, Any]:
+        cached = self.act_cached(doc_id)
+        self.scan_copies.append(cached)
+        return cached.data
+
+    def act_cached(self, doc_id: str):
         doc_id = (doc_id or "").strip()
         m = re.fullmatch(r"(?:act-)?(\d+)", doc_id)
         if not m:
             raise LawError("bad_argument", f"'{doc_id}' is not a Constitutional Court act id.",
                            "Pass doc_id from bg_case_search, for example 'act-10457'.")
-        return self.store.fetch(f"p{PARSE_VERSION}-cc-act-{m.group(1)}", ROW_URL.format(id=m.group(1)), _parse_act,
-                                max_age_s=30 * 24 * 3600).data
+        return self.store.fetch(f"p{PARSE_VERSION}-cc-act-{m.group(1)}", ROW_URL.format(id=m.group(1)), _parse_act)
 
 
 def _snippet(text: str, pos: int, size: int) -> str:

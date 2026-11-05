@@ -46,7 +46,7 @@ GET = {
             },
             "as_of": {
                 "type": "string",
-                "description": "Bulgarian acts only: read the version in force on this date, YYYY-MM-DD. "
+                "description": "Bulgarian acts only: read the revision promulgated by this date, YYYY-MM-DD, not an effective-date determination. "
                                "Only works where the corpus has a reconstructed history.",
             },
             "language": {
@@ -71,7 +71,8 @@ SEARCH = {
         "Read-only. Searches the Bulgarian corpus (lsource.net: 6,500+ закони, кодекси, наредби and правилници, "
         "in force and repealed, each with its latest ДВ issue) by abbreviation or title words, plus the "
         "well-known EU acts (ОРЗД, Регламент за ИИ, DSA, NIS2, DORA). Use it when the user names a topic or an "
-        "unknown abbreviation; when the citation is already known ('чл. 344 КТ'), call bg_law_get directly."
+        "unknown abbreviation. Set jurisdiction=EU for indexed CELLAR title discovery beyond the aliases. "
+        "When the citation is already known ('чл. 344 КТ'), call bg_law_get directly."
     ),
     "parameters": {
         "type": "object",
@@ -173,7 +174,7 @@ CASE_GET = {
         "properties": {
             "doc_id": {"type": "string", "description": "Constitutional Court act id from bg_case_search, "
                                                          "e.g. 'act-10457'."},
-            "case_number": {"type": "string", "description": "Constitutional case number, e.g. '15/2026'."},
+            "case_number": {"type": "string", "description": "Constitutional case number '15/2026', or EU C/T case number such as 'C-311/18'."},
             "celex": {"type": "string", "description": "CJEU judgment: '62018CJ0311', 'C-311/18' or 'Schrems II'."},
             "paragraph": {"type": "string", "description": "CJEU only: one numbered point of the judgment, e.g. '201'."},
             "language": {"type": "string", "enum": ["bg", "en"], "description": "CJEU only: language."},
@@ -184,4 +185,52 @@ CASE_GET = {
     },
 }
 
-ALL_SCHEMAS = [GET, SEARCH, TOC, HISTORY, CASE_SEARCH, CASE_GET]
+_OFFSET = {"type": "integer", "minimum": 0, "default": 0,
+           "description": "Continue from next_offset returned by the previous call."}
+GET["parameters"]["properties"].update({
+    "revision": {"type": "string", "description": "Exact BG revision hash or EU consolidated document CELEX from bg_law_history. Mutually exclusive with as_of."},
+    "offset": _OFFSET,
+})
+SEARCH["parameters"]["properties"].update({
+    "offset": _OFFSET,
+    "jurisdiction": {"type": "string", "enum": ["auto", "BG", "EU"], "default": "auto",
+                     "description": "auto resolves known EU identifiers and otherwise searches BG titles; EU searches all CELLAR metadata titles."},
+})
+CASE_GET["parameters"]["properties"]["offset"] = _OFFSET
+CASE_SEARCH["parameters"]["properties"].update({
+    "court": {"type": "string", "enum": ["BG", "EU"], "default": "BG",
+              "description": "BG: Constitutional Court; EU: CELLAR court decision title search using query."},
+    "offset": _OFFSET,
+    "scan_offset": {"type": "integer", "minimum": 0, "default": 0,
+                    "description": "Continue BG keyword candidates from keyword_scan.next_scan_offset."},
+})
+HISTORY["parameters"]["properties"]["language"] = {"type": "string", "enum": ["bg", "en"]}
+
+
+def _tool(name, description, properties, required=()):
+    return {"name": name, "description": description,
+            "parameters": {"type": "object", "properties": properties, "required": list(required)}}
+
+
+CHANGES = _tool("bg_law_changes", "Bulgarian law: read amendment diffs between revisions. Read-only. "
+                "Give two promulgation dates or a revision hash from bg_law_history. Resolved source dates may be narrower than requested.",
+                {"law": _LAW, "date_from": {"type": "string"}, "date_to": {"type": "string"},
+                 "revision": {"type": "string"}, "offset": _OFFSET,
+                 "max_chars": {"type": "integer", "minimum": 500, "maximum": 60000}}, ["law"])
+TRANSPOSITION = _tool("bg_law_transposition", "Bulgarian and EU law: find transposition relationships. Read-only. "
+                      "Returns the source sentences claiming a BG act implements EU legislation. This does not establish compliance.",
+                      {"law": _LAW, "query": {"type": "string"}, "offset": _OFFSET,
+                       "limit": {"type": "integer", "minimum": 1, "maximum": 500}})
+RECENT = _tool("bg_law_recent", "Bulgarian law: list recent gazette amendments. Read-only. "
+               "A bounded feed of recent corpus revisions, with issue dates and revision hashes.",
+               {"offset": _OFFSET, "limit": {"type": "integer", "minimum": 1, "maximum": 100}})
+STATUS = _tool("bg_law_status", "Bulgarian and EU law: check source and cache status. Read-only. "
+               "Never returns the API key. check_sources=true makes fresh connection probes; otherwise reports saved diagnostics.",
+               {"check_sources": {"type": "boolean", "default": False}})
+EXPORT = _tool("bg_law_export", "Bulgarian law: export source text or structured XML. Read-only. "
+               "Returns paginated Akoma Ntoso XML or the complete act text. Reassemble pages before parsing XML.",
+               {"law": _LAW, "format": {"type": "string", "enum": ["akn", "text"], "default": "akn"},
+                "as_of": {"type": "string"}, "offset": _OFFSET,
+                "max_chars": {"type": "integer", "minimum": 500, "maximum": 60000}}, ["law"])
+
+ALL_SCHEMAS = [GET, SEARCH, TOC, HISTORY, CASE_SEARCH, CASE_GET, CHANGES, TRANSPOSITION, RECENT, STATUS, EXPORT]

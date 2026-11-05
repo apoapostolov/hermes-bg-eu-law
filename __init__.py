@@ -16,6 +16,7 @@ from .client import Store
 from .tools import Tools, make_handlers
 
 logger = logging.getLogger(__name__)
+_PLUGIN_SETTINGS = None
 
 _SKILL = Path(__file__).resolve().parent / "skills" / "read-law" / "SKILL.md"
 _SKILL_DESCRIPTION = (
@@ -25,7 +26,11 @@ _SKILL_DESCRIPTION = (
 
 
 def register(ctx):
-    """Register the six read-only tools, then the quoting skill."""
+    """Register read-only legal tools, then the quoting skill."""
+    global _PLUGIN_SETTINGS
+    from . import settings as plugin_settings
+    plugin_settings.bind_context(ctx)
+    _PLUGIN_SETTINGS = plugin_settings
 
     def setting(key, default=None):
         try:

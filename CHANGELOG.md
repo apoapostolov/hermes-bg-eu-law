@@ -3,6 +3,41 @@
 All notable changes to bg-law are recorded here. The format follows Keep a Changelog and the version
 follows the plugin manifest.
 
+## [1.0.2] - 2026-11-05
+
+Historical quotations now retain the revision they actually came from, and point or letter citations
+must exist in the returned source. The settings page adds connection checks and source-specific
+controls, with five additional tools for the lsource API.
+
+### Fixed
+
+- Tele2 Sverige and its joined case numbers resolve to the correct judgment. Historical `§` queries
+  read the dated section rather than an identically numbered article.
+- Historical text keeps its own revision date and ДВ issue. Empty, newer or unavailable text is
+  refused; an article can be read historically even when absent from today's document.
+- Nonexistent points and letters return errors. Inserted paragraphs such as `(2а)` remain separate,
+  and repeated transitional section numbers are reported as ambiguous.
+- EU history works without the Bulgarian API key. Explicit consolidated revisions can be read without
+  silently substituting another version, and stale court copies and version indexes carry warnings.
+- Dotted search queries have separate cache entries. Interrupted or interleaved cache writes cannot
+  pair legal text with another response's validators. Redirects between source hosts strip credentials.
+- Failed court downloads consume the scan budget. Search totals, continuation and abbreviation kind
+  filters are preserved, and throttled requests retain retry guidance.
+
+### Added
+
+- Settings for independent legislation and court sources, key verification, languages, cache freshness,
+  cache maintenance and redacted diagnostics export.
+- `bg_law_changes`, `bg_law_transposition`, `bg_law_recent`, `bg_law_export` and `bg_law_status`.
+- CELLAR title discovery beyond the local EU aliases, EU court title search and verified C/T case-number
+  retrieval. Long provisions, decisions, exports and diffs support continuation.
+
+### Upgrade
+
+Restart Hermes after updating, then start a new session. Existing credentials and settings are retained; the cache
+schema changes to 3 and responses are fetched again. The existing combined case-law switch remains
+supported and migrates when the new source controls are saved.
+
 ## [1.0.1] - 2026-10-31
 
 A citation that resolved to the wrong act, a judgment paragraph that stopped mid-sentence and an EU

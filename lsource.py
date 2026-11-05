@@ -23,6 +23,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from .client import LawError, Response, Store
 from .version import PARSE_VERSION
+from .provisions import parse_akn
 
 API = "https://lsource.net/v1"
 _P = f"p{PARSE_VERSION}-"
@@ -217,11 +218,9 @@ def _run(text: str, rx) -> List[tuple]:
     run = [marks[0]]
     expected = marks[0][1]
     for pos, num in marks[1:]:
-        if re.fullmatch(r"\d+", expected or ""):
-            want = str(int(expected) + 1)
-        else:
-            want = expected
-        if num == want:
+        want = str(int(re.match(r"^\d+", expected).group()) + 1)
+        if num == want or (re.match(r"^\d+", num).group() == re.match(r"^\d+", expected).group()
+                           and num > expected):
             run.append((pos, num))
             expected = num
     return run
@@ -257,6 +256,7 @@ def parse_act_text(doc: Dict[str, Any]) -> Dict[str, Any]:
         "id": doc.get("id", ""), "title": (doc.get("title") or "").strip(),
         "kind": doc.get("kind", ""), "official": bool(doc.get("official")),
         "notice": doc.get("notice", ""), "at_date": doc.get("at_date") or "",
+        "issue": doc.get("issue", ""), "is_current": doc.get("is_current"),
         "in_force_from": "", "gazette_chain_raw": "", "gazette_chain": [],
     }
     header_done = False
@@ -387,18 +387,20 @@ class BulgarianLaw:
                                         max_age_s=max_age_s, immutable=immutable)
             except LawError as err:
                 last = err
-                if err.kind not in ("upstream", "rate_limited") or attempt:
+                if err.kind != "upstream" or attempt:
                     raise
                 time.sleep(1.5)
         raise last or LawError("upstream", "lsource.net is unavailable.")
 
     # -- endpoints ---------------------------------------------------------
-    def search(self, query: str, limit: int = 10, kind: str = "") -> List[Dict[str, Any]]:
-        params = [f"q={_q(query)}", f"limit={max(1, min(50, limit))}"]
+    def search_page(self, query: str, limit: int = 10, kind: str = "", offset: int = 0):
+        params = [f"q={_q(query)}", f"limit={max(1, min(100, limit))}", f"offset={max(0, offset)}"]
         if kind:
             params.append(f"kind={_q(kind)}")
-        got = self._get(f"{_P}bg-search-{fold(query)}-{limit}-{fold(kind)}", f"{API}/acts?{'&'.join(params)}")
-        return got.data.get("results", []) if isinstance(got.data, dict) else []
+        return self._get(f"{_P}bg-search-{query}-{limit}-{kind}-{offset}", f"{API}/acts?{'&'.join(params)}")
+
+    def search(self, query: str, limit: int = 10, kind: str = "") -> List[Dict[str, Any]]:
+        return self.search_page(query, limit, kind).data.get("results", [])
 
     def meta(self, act_id: str):
         return self._get(f"{_P}bg-meta-{act_id}", f"{API}/acts/{_q(act_id)}")
@@ -406,16 +408,27 @@ class BulgarianLaw:
     def history(self, act_id: str):
         return self._get(f"{_P}bg-history-{act_id}", f"{API}/acts/{_q(act_id)}/history")
 
-    def act(self, act_id: str):
+    def act(self, act_id: str, as_of: str = "", revision: str = ""):
         """Parsed consolidated text of one act (cached; rechecked with the source after max_age_hours)."""
-        return self._get(f"{_P}bg-text-{act_id}", f"{API}/acts/{_q(act_id)}/text", parse=lambda body, resp: parse_act_text(_json(body, resp)))
+        params = ("?as_of=" + _q(as_of)) if as_of else (("?at=" + _q(revision)) if revision else "")
+        return self._get(f"{_P}bg-text-{act_id}{params}", f"{API}/acts/{_q(act_id)}/text{params}",
+                         parse=lambda body, resp: parse_act_text(_json(body, resp)))
 
     def article_now(self, act_id: str, number: str):
-        return self._get(f"{_P}bg-art-{act_id}-{number}", f"{API}/acts/{_q(act_id)}/articles/{_q(number)}", immutable=True)
+        return self._get(f"{_P}bg-art-{act_id}-{number}", f"{API}/acts/{_q(act_id)}/articles/{_q(number)}")
 
     def article_as_of(self, act_id: str, number: str, as_of: str):
         url = f"{API}/acts/{_q(act_id)}/articles/{_q(number)}?as_of={_q(as_of)}"
-        return self._get(f"{_P}bg-art-{act_id}-{number}-{as_of}", url, immutable=True)
+        return self._get(f"{_P}bg-art-{act_id}-{number}-{as_of}", url)
+
+    def akn(self, act_id: str, as_of: str = ""):
+        suffix = "?as_of=" + _q(as_of) if as_of else ""
+        return self._get(f"{_P}bg-akn-{act_id}{suffix}", f"{API}/acts/{_q(act_id)}/akn{suffix}", parse=parse_akn)
+
+    def endpoint(self, path: str, **params):
+        query = "&".join(f"{k}={_q(v)}" for k, v in params.items() if v not in (None, ""))
+        suffix = "?" + query if query else ""
+        return self._get(f"{_P}bg-api-{path}{suffix}", f"{API}/{path}{suffix}")
 
     # -- resolution --------------------------------------------------------
     def resolve(self, name: str) -> Tuple[str, str]:
@@ -510,11 +523,14 @@ def find_article(parsed: Dict[str, Any], number: str, kind: Optional[str] = None
         want = m.group(1) + (cyrillic_letter(m.group(2)) if m.group(2) else "")
     families = {"article": "Чл.", "paragraph_section": "§"}
     marker = families.get(kind or "")
-    for art in parsed["articles"]:
-        if marker and not art["ref"].startswith(marker):
-            continue
-        if art["number"].lower() == want:
-            return art
+    hits = [art for art in parsed["articles"] if art["number"].lower() == want
+            and (not marker or art["ref"].startswith(marker))]
+    if len(hits) > 1:
+        raise LawError("ambiguous_provision", "This number occurs in more than one section of the act.",
+                       "Read the structured export and identify the enclosing transitional provisions.",
+                       {"candidates": [{"id": a["ref"], "scope": a["scope"], "heading": a["heading"]} for a in hits]})
+    if hits:
+        return hits[0]
     if marker:
         return None
     for art in parsed["articles"]:
